@@ -14,12 +14,12 @@ coding terms with local rules, so it's fast and works offline.
 
 ## Install
 
-Add it to `~/.config/opencode/tui.json`:
+Requires OpenCode 2. Add it to `~/.config/opencode/cli.json`:
 
 ```json
 {
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["opencode-talk"]
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": ["opencode-talk"]
 }
 ```
 
@@ -38,7 +38,8 @@ Restart OpenCode. The first time you talk, macOS asks for **Microphone** and
 | Cancel               |             | `/talk-cancel` |
 
 While you talk, the live transcript shows in a toast. When you stop, the
-cleaned text is added to the prompt so you can edit it before sending.
+cleaned text is inserted into the prompt box so you can edit it before sending.
+If the prompt box isn't focused, the text is copied to the clipboard instead.
 
 **Say "send it"** at the end to submit right away.
 
@@ -55,13 +56,16 @@ These terms are also sent to Apple's recognizer as hints, which improves accurac
 
 ```json
 {
-  "plugin": [
-    ["opencode-talk", {
-      "keybind": "<leader>v",
-      "sendKeybind": "<leader>j",
-      "lang": "en-US",
-      "vocab": { "acme db": "AcmeDB", "super base": "Supabase" }
-    }]
+  "plugins": [
+    {
+      "package": "opencode-talk",
+      "options": {
+        "keybind": "<leader>v",
+        "sendKeybind": "<leader>j",
+        "lang": "en-US",
+        "vocab": { "acme db": "AcmeDB", "super base": "Supabase" }
+      }
+    }
   ]
 }
 ```
@@ -95,15 +99,16 @@ bin/opencode-talk-helper check                 # permissions + on-device support
 bin/opencode-talk-helper transcribe clip.aiff  # transcribe a file
 ```
 
-Test a local checkout by pointing `tui.json` at the folder:
-`"plugin": ["/path/to/opencode-talk"]`.
+Test a local checkout by pointing `cli.json` at the folder:
+`"plugins": ["/path/to/opencode-talk"]`.
 
 ## Roadmap
 
 - Windows helper (WinRT `Windows.Media.SpeechRecognition`), same protocol
 - Linux helper (Vosk, small one-time model download)
 - macOS 26 `SpeechAnalyzer` backend for longer dictation
-- Live text directly in the prompt box (needs an OpenCode API for replacing prompt text)
+- Live text directly in the prompt box while talking
+- Official prompt-insert API in OpenCode (currently inserts via the focused textarea)
 
 ## License
 
