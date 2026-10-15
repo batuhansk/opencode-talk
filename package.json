@@ -1,0 +1,20 @@
+{
+  "name": "opencode-talk",
+  "version": "0.1.0",
+  "description": "Talk instead of type in OpenCode. Zero-download, on-device speech-to-text using the speech engine built into macOS.",
+  "keywords": ["opencode", "plugin", "speech-to-text", "stt", "voice", "dictation", "macos"],
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": { "import": "./index.js" },
+    "./tui": { "import": "./index.js" }
+  },
+  "files": ["index.js", "lib", "bin/opencode-talk-helper"],
+  "os": ["darwin"],
+  "scripts": {
+    "build": "sh scripts/build-helper.sh",
+    "test": "node --test test/*.test.js",
+    "prepack": "npm run build && npm test"
+  }
+}
