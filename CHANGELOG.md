@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 (2026-10-15)
+
+- Releases are now staged on npm through trusted publishing (no tokens) and go live only after a maintainer approves them with a passkey or 2FA
+- CI builds the helper once with Xcode 26 and tests that binary on macOS 14, 15 and 26
+- README: updated Releasing section
+
 ## 0.1.0 (2026-10-15)
 
 First release, for OpenCode 2 on macOS 14+.

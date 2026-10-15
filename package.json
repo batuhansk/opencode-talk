@@ -1,6 +1,6 @@
 {
   "name": "opencode-talk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Talk instead of type in OpenCode. Zero-download, on-device speech-to-text using the speech engine built into macOS.",
   "keywords": [
     "opencode",
