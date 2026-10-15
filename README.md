@@ -9,7 +9,7 @@ the on-device speech recognition built into macOS.
 ## Why
 
 Other voice plugins need whisper.cpp, sox, a ~600 MB model, and an LLM API call
-on every prompt. opencode-talk ships one ~400 KB native helper and cleans up
+on every prompt. opencode-talk ships one ~200 KB native helper and cleans up
 coding terms with local rules, so it's fast and works offline.
 
 ## Install
