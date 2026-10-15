@@ -31,15 +31,15 @@ Restart OpenCode. The first time you talk, macOS asks for **Microphone** and
 
 ## Use
 
-One key does everything: **`ctrl+g`** (or `ctrl+x v`, or `/talk`).
+One key does everything: **`ctrl+y`** (or `ctrl+x v`, or `/talk`).
 
-| Do this           | What happens                                            |
-| ----------------- | ------------------------------------------------------- |
-| **Hold** `ctrl+g` | Talk while holding, release to insert                   |
-| **Tap** `ctrl+g`  | Start listening; tap again or pause ~2 s to insert      |
-| `ctrl+x v`        | Same as tapping; use this in Warp, which takes `ctrl+g` |
-| `esc`             | Cancel while listening                                  |
-| Say **"send it"** | Insert and submit in one go                             |
+| Do this           | What happens                                       |
+| ----------------- | -------------------------------------------------- |
+| **Hold** `ctrl+y` | Talk while holding, release to insert              |
+| **Tap** `ctrl+y`  | Start listening; tap again or pause ~2 s to insert |
+| `ctrl+x v`        | Same as tapping (no hold)                          |
+| `esc`             | Cancel while listening                             |
+| Say **"send it"** | Insert and submit in one go                        |
 
 While you talk, a live `● 0:03 ▂▅▃▁ …your words…` line shows in the prompt footer.
 The bars are the microphone level, so you can see it hears you. If the mic
@@ -67,7 +67,7 @@ These terms are also sent to Apple's recognizer as hints, which improves accurac
     {
       "package": "opencode-talk",
       "options": {
-        "keybind": "ctrl+g,<leader>v",
+        "keybind": "ctrl+y,<leader>v",
         "mic": "MacBook",
         "autoSend": false,
         "silenceStop": 2,
@@ -79,7 +79,7 @@ These terms are also sent to Apple's recognizer as hints, which improves accurac
 }
 ```
 
-- `keybind`: talk keys, comma-separated (default `ctrl+g,<leader>v`). Holding only works with a single chord like `ctrl+g`.
+- `keybind`: talk keys, comma-separated (default `ctrl+y,<leader>v`). Holding only works with a single chord like `ctrl+y`.
 - `mic`: microphone to use, by name fragment, e.g. `"MacBook"` or `"AirPods"` (default: system input). List them with `bin/opencode-talk-helper mics`.
 - `autoSend`: submit right after inserting (default `false`)
 - `silenceStop`: seconds of silence before auto-stopping in tap mode; `0` disables (default `2`)

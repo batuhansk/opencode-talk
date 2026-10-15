@@ -1,14 +1,14 @@
 // opencode-talk: talk instead of type in OpenCode (v2 CLI plugin).
 //
 // One key does everything:
-//   tap  ctrl+g / ctrl+x v  start; tap again (or pause) to insert
-//   hold ctrl+g             talk while holding; release to insert
+//   tap  ctrl+y / ctrl+x v  start; tap again (or pause) to insert
+//   hold ctrl+y             talk while holding; release to insert
 //   esc                     cancel while listening
 // End with "send it" to submit, or set autoSend.
 //
 // Options (cli.json):
 //   { "package": "opencode-talk", "options": {
-//       "keybind": "ctrl+g,<leader>v",    // talk keys; a single chord like ctrl+g also supports holding
+//       "keybind": "ctrl+y,<leader>v",    // talk keys; a single chord like ctrl+y also supports holding
 //       "mic": "MacBook",                 // microphone name fragment; default: system input
 //       "autoSend": false,                // submit after inserting
 //       "silenceStop": 2,                 // seconds of silence before auto-stop in tap mode; 0 disables
@@ -171,7 +171,7 @@ export default Plugin.define({
           title: "Talk",
           description: "Tap to start/stop, or hold while speaking",
           group: "Voice",
-          bind: options.keybind ?? "ctrl+g,<leader>v",
+          bind: options.keybind ?? "ctrl+y,<leader>v",
           palette: true,
           suggested: true,
           slash: { name: "talk" },
