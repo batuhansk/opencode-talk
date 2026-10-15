@@ -1,8 +1,8 @@
 // opencode-talk: talk instead of type in OpenCode (v2 CLI plugin).
 //
 // One key does everything:
-//   tap  ctrl+y / ctrl+x v  start; tap again (or pause) to insert
-//   hold ctrl+y             talk while holding; release to insert
+//   tap  ctrl+y / ctrl+x v  start; press again (or pause) to finish
+//   hold ctrl+y             talk while holding; release to finish
 //   esc                     cancel while listening
 // End with "send it" to submit, or set autoSend.
 //
@@ -21,13 +21,26 @@
 
 import { Plugin } from "@opencode/plugin/tui"
 import { spawn } from "node:child_process"
+import { appendFileSync } from "node:fs"
+import { homedir } from "node:os"
+import path from "node:path"
 import { buildVocab, clean, extractSend } from "./lib/clean.js"
 import { listLanguages, prepareEngine, startListening } from "./lib/helper.js"
-import { createIndicator } from "./lib/indicator.js"
+import { createIndicator, displayKey, footerHints } from "./lib/indicator.js"
 import { createLivePreview } from "./lib/live.js"
 import { createPushToTalk } from "./lib/ptt.js"
 
 const NO_SPEECH_TIMEOUT = 8000
+
+// OPENCODE_TALK_DEBUG=1 writes a trace to ~/Library/Logs/opencode-talk.log.
+const DEBUG_LOG = process.env.OPENCODE_TALK_DEBUG ? path.join(homedir(), "Library/Logs/opencode-talk.log") : null
+let instances = 0
+function trace(instance, message) {
+  if (!DEBUG_LOG) return
+  try {
+    appendFileSync(DEBUG_LOG, `${new Date().toISOString()} [#${instance}] ${message}\n`)
+  } catch {}
+}
 const NO_AUDIO_CHECK = 2500
 const NO_AUDIO_LEVEL = 0.05
 
@@ -43,6 +56,8 @@ function copyToClipboard(text) {
 export default Plugin.define({
   id: "opencode-talk",
   async setup(context) {
+    const instance = `${++instances}-${Math.random().toString(36).slice(2, 6)}`
+    trace(instance, "setup")
     const options = context.options ?? {}
     const vocab = buildVocab(options.vocab)
     const hints = [...vocab.hints, ...(options.hints ?? [])].slice(0, 100)
@@ -145,11 +160,12 @@ export default Plugin.define({
     const toast = (message, variant = "info", duration = 2500) =>
       context.ui.toast.show({ title: "Talk", message, variant, duration })
 
-    const indicator = await createIndicator(context).catch(() => null)
+    const footer = footerHints({ key: displayKey(options.keybind), silenceStop: options.silenceStop ?? 2 })
+    const indicator = await createIndicator(context, footer).catch(() => null)
     const status = {
       show(s) {
         if (indicator) return indicator.show(s)
-        if (s.phase === "listening" && !s.text) toast("🎙 Listening… tap again or press esc", "info", 60000)
+        if (s.phase === "listening" && !s.text) toast(`🎙 Listening… ${footer.tap}`, "info", 60000)
         else if (s.text) toast(`🎙 ${s.text}`, "info", 60000)
       },
       level: (v) => indicator?.level(v),
@@ -173,6 +189,7 @@ export default Plugin.define({
     }
 
     async function deliver(text, submit) {
+      trace(instance, `deliver ${JSON.stringify(text)}`)
       const input = target && !target.isDestroyed ? target : focusedInput()
       if (input) {
         input.focus?.()
@@ -198,7 +215,8 @@ export default Plugin.define({
         allowCloud,
         hints,
         onInstalling: ({ name }) => toast(`Downloading Apple's on-device model for ${name} (one-time)…`, "info", 8000),
-        onReady: ({ mic } = {}) => {
+        onReady: ({ mic, engine, lang } = {}) => {
+          trace(instance, `ready mic=${mic} engine=${engine} lang=${lang}`)
           resetSilence()
           // A mic that's connected but silent (e.g. AirPods in their case)
           // looks like "nothing happens". Say so instead.
@@ -221,6 +239,7 @@ export default Plugin.define({
           // Words go straight into the prompt; the footer keeps the clock and
           // meter. If the prompt isn't available, the footer shows the words.
           const inPrompt = live.active && live.update(clean(text, vocab, language?.lang))
+          trace(instance, `partial ${JSON.stringify(text)} inPrompt=${inPrompt}`)
           status.show({ text: inPrompt ? "" : text, holding: ptt.holding })
           resetSilence()
         },
@@ -233,6 +252,7 @@ export default Plugin.define({
             return toast("Didn't catch anything", "warning", 1500)
           }
           const committed = live.commit(text + " ")
+          trace(instance, `final ${JSON.stringify(text)} commit=${committed}`)
           if (committed === true) {
             if (submit) context.keymap.dispatch("prompt.submit")
           } else if (committed === "kept") {
@@ -288,6 +308,7 @@ export default Plugin.define({
           suggested: true,
           slash: { name: "talk" },
           run: (_input, event) => {
+            trace(instance, `talk key (repeated=${event?.repeated === true}, active=${session !== null})`)
             ptt.press(event?.repeated === true)
             if (ptt.holding) status.show({ holding: true })
           },
@@ -314,6 +335,7 @@ export default Plugin.define({
     }))
 
     return () => {
+      trace(instance, "cleanup")
       cancel()
       indicator?.dispose()
     }

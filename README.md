@@ -61,21 +61,25 @@ Restart OpenCode. The first time you talk, macOS asks to allow **Microphone** an
 
 ## Use
 
-| Do this                       | What happens                               |
-| ----------------------------- | ------------------------------------------ |
-| **Hold** `ctrl+y`             | Talk while holding; release to finish      |
-| **Tap** `ctrl+y`              | Start; tap again, or pause ~2 s, to finish |
-| `ctrl+x` then `v`, or `/talk` | Same as tapping (no hold)                  |
-| `esc`                         | Cancel and remove what was said            |
-| `/talk:language`              | Switch the language you speak              |
-| End with **"send it"**        | Finish and submit in one go                |
+| Do this                       | What happens                                 |
+| ----------------------------- | -------------------------------------------- |
+| **Hold** `ctrl+y`             | Talk while holding; release to finish        |
+| **Tap** `ctrl+y`              | Start; press again, or pause ~2 s, to finish |
+| `ctrl+x` then `v`, or `/talk` | Same as tapping (no hold)                    |
+| `esc`                         | Cancel and remove what was said              |
+| `/talk:language`              | Switch the language you speak                |
+| End with **"send it"**        | Finish and submit in one go                  |
 
 Your words appear **in the prompt box as you speak**, at your cursor, and get
 corrected as the recognizer refines them. When you finish, the cleaned-up text
 stays there so you can edit it before pressing Enter.
 
-The footer shows a timer and a microphone level meter (`● 0:04 ▂▅▇▃`), so you
-can see the mic is hearing you.
+The footer shows a timer, the microphone level and the active language, plus
+what to do next, so you always know the mic is hearing you:
+
+```text
+● 0:04 ▂▅▇▃ EN ctrl+y or pause to finish · esc cancels
+```
 
 > [!TIP]
 > Hold-to-talk works in any terminal. Terminals don't report key releases to
@@ -247,6 +251,21 @@ Recognition**, and allow `opencode-talk-helper`. Then check from a terminal:
 </details>
 
 <details>
+<summary><b>Something else looks wrong (e.g. text appears twice)</b></summary>
+
+Start OpenCode with a debug trace, reproduce it once, and attach the log to an
+[issue](https://github.com/batuhansk/opencode-talk/issues):
+
+```bash
+OPENCODE_TALK_DEBUG=1 opencode
+# then: ~/Library/Logs/opencode-talk.log
+```
+
+If you've updated the plugin while OpenCode was running, restart OpenCode first.
+
+</details>
+
+<details>
 <summary><b>Words land in the clipboard instead of the prompt</b></summary>
 
 That happens when the prompt box isn't focused when you start talking. Press
@@ -350,7 +369,8 @@ bin/opencode-talk-helper listen --engine dictation     # talk; type "stop" + Ent
 bin/opencode-talk-helper transcribe clip.aiff          # transcribe a file
 ```
 
-Set `OPENCODE_TALK_DEBUG=1` for diagnostics on stderr, and
+Set `OPENCODE_TALK_DEBUG=1` for diagnostics (helper: stderr; plugin:
+`~/Library/Logs/opencode-talk.log`), and
 `OPENCODE_TALK_TEST_FILE=clip.aiff` to stream a file through the live pipeline
 instead of the microphone (used by the tests).
 
