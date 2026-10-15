@@ -38,7 +38,7 @@ into macOS and cleans up coding terms with fast local rules.
 |                              | opencode-talk          | Typical whisper-based plugin      |
 | ---------------------------- | ---------------------- | --------------------------------- |
 | Install                      | One plugin line        | Homebrew packages, Python, models |
-| Download size                | ~215 kB package        | ~700 MB                           |
+| Download size                | ~225 kB package        | ~700 MB                           |
 | API key / per-prompt AI call | None                   | Usually                           |
 | Words appear while you speak | Yes, in the prompt box | No (record, then transcribe)      |
 | Works offline                | Yes                    | Depends                           |
@@ -251,7 +251,7 @@ Recognition**, and allow `opencode-talk-helper`. Then check from a terminal:
 </details>
 
 <details>
-<summary><b>Something else looks wrong (e.g. text appears twice)</b></summary>
+<summary><b>Something else looks wrong</b></summary>
 
 Start OpenCode with a debug trace, reproduce it once, and attach the log to an
 [issue](https://github.com/batuhansk/opencode-talk/issues):
