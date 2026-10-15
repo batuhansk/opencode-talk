@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write # create the GitHub Release
-  id-token: write # npm provenance / trusted publishing
+  id-token: write # npm trusted publishing (OIDC) and provenance
 
 jobs:
   release:
@@ -34,19 +34,18 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Publish to npm
-        # Uses npm trusted publishing (no token) if configured on npmjs.com,
-        # otherwise the NPM_TOKEN repository secret. Skipped if this version
-        # was already published by hand.
+      - name: Stage on npm
+        # Trusted publishing (OIDC): no token. The version is staged and goes
+        # live only after a maintainer approves it on npmjs.com with 2FA/passkey.
+        # Skipped if this version is already on npm (e.g. published by hand).
         run: |
           version=$(node -p "require('./package.json').version")
           if npm view "opencode-talk@$version" version >/dev/null 2>&1; then
-            echo "opencode-talk@$version is already on npm; skipping publish"
+            echo "opencode-talk@$version is already on npm; skipping"
           else
-            npm publish --provenance --access public --ignore-scripts
+            npm stage publish --provenance --access public --ignore-scripts
+            echo "Staged opencode-talk@$version. Approve it at https://www.npmjs.com/package/opencode-talk (Staged Packages) to publish."
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         run: |

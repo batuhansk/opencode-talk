@@ -431,20 +431,22 @@ Helper tests need Speech Recognition permission, so they skip on CI.
 
 GitHub Actions does the work:
 
-- **CI** on every push and pull request: builds on macOS 14 and 15, verifies a
-  signed universal binary, runs the tests, checks formatting and package contents.
+- **CI** on every push and pull request: builds the helper once with Xcode 26
+  (strict Swift 6), verifies a signed universal binary, then runs that same
+  binary and the tests on macOS 14, 15 and 26.
 - **Release** on a `v*` tag: checks the tag matches `package.json`, builds,
-  tests, publishes to npm with provenance, and creates a GitHub Release with the
-  helper attached and notes from `CHANGELOG.md`.
+  tests, **stages** the version on npm through trusted publishing (no tokens),
+  and creates a GitHub Release with the helper attached and notes from
+  `CHANGELOG.md`.
 
 ```bash
 npm version minor        # bumps package.json and creates the tag
-git push --follow-tags   # GitHub Actions publishes
+git push --follow-tags   # GitHub Actions builds, tests and stages it on npm
 ```
 
-One-time setup: on npmjs.com, add this repo as a trusted publisher for
-`opencode-talk` (workflow `release.yml`, environment `npm`), or add an
-`NPM_TOKEN` repository secret.
+A staged version goes live only after a maintainer approves it on npmjs.com
+(**Staged Packages** tab) with their passkey or 2FA, so nothing reaches users
+without a human sign-off.
 
 ## Roadmap
 
