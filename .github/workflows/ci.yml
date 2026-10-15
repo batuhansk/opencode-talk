@@ -24,7 +24,7 @@ jobs:
     runs-on: macos-${{ matrix.macos }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Build helper (Swift 6, warnings as errors)
