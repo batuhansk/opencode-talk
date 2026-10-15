@@ -11,50 +11,21 @@
 //   {"event":"final","text":"..."}
 //   {"event":"error","message":"..."}
 //
-// Stops when stdin receives "stop", stdin closes, or on SIGINT/SIGTERM.
+// Write "stop" to stdin (or close it) to finish and get the final text.
+// SIGINT/SIGTERM abort immediately. Exits if its parent process goes away.
 
 import AVFoundation
 import Foundation
 import Speech
 
-setvbuf(stdout, nil, _IOLBF, 0)
+// MARK: - Output
 
-// macOS asks for microphone/speech permission on behalf of the "responsible"
-// process (usually the terminal app). Re-launch ourselves as our own
-// responsible process so the prompt names this helper and works from any host.
-func relaunchAsResponsible() {
-  if ProcessInfo.processInfo.environment["OPENCODE_TALK_CHILD"] != nil { return }
-  typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
-  guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_spawnattrs_setdisclaim")
-  else { return }
-  let disclaim = unsafeBitCast(sym, to: Disclaim.self)
-  var attr: posix_spawnattr_t?
-  posix_spawnattr_init(&attr)
-  _ = disclaim(&attr, 1)
-  setenv("OPENCODE_TALK_CHILD", "1", 1)
-  let path = Bundle.main.executablePath ?? CommandLine.arguments[0]
-  var argv: [UnsafeMutablePointer<CChar>?] = CommandLine.arguments.map { strdup($0) } + [nil]
-  var pid: pid_t = 0
-  guard posix_spawn(&pid, path, nil, &attr, &argv, environ) == 0 else { return }
-  // Forward stop signals to the child; it handles them gracefully.
-  for sig in [SIGINT, SIGTERM] {
-    signal(sig, SIG_IGN)
-    let src = DispatchSource.makeSignalSource(signal: sig, queue: .global())
-    src.setEventHandler { kill(pid, sig) }
-    src.resume()
-    _ = Unmanaged.passRetained(src)
-  }
-  var status: Int32 = 0
-  while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
-  exit((status >> 8) & 0xff)
-}
-relaunchAsResponsible()
-
-func emit(_ obj: [String: String]) {
-  guard let data = try? JSONSerialization.data(withJSONObject: obj),
+func emit(_ fields: [String: String]) {
+  guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]),
     let line = String(data: data, encoding: .utf8)
   else { return }
   print(line)
+  fflush(stdout)
 }
 
 func fail(_ message: String) -> Never {
@@ -62,63 +33,240 @@ func fail(_ message: String) -> Never {
   exit(1)
 }
 
-var args = Array(CommandLine.arguments.dropFirst())
-let command = args.isEmpty ? "listen" : args.removeFirst()
-var lang = Locale.current.identifier.components(separatedBy: "@")[0]
-var hints: [String] = []
-var positional: [String] = []
-while !args.isEmpty {
-  let flag = args.removeFirst()
-  if !flag.hasPrefix("--") { positional.append(flag); continue }
-  guard !args.isEmpty else { break }
-  let value = args.removeFirst()
-  if flag == "--lang" { lang = value } else if flag == "--hint" { hints.append(value) }
+// MARK: - Responsible-process relaunch
+
+// macOS asks for microphone/speech permission on behalf of the "responsible"
+// process (usually the terminal app). Re-launch ourselves as our own
+// responsible process so the prompt names this helper and works from any host.
+
+/// Read by the async-signal handler below, which can't capture context.
+nonisolated(unsafe) private var relaunchedChild: pid_t = 0
+
+func relaunchAsResponsible() {
+  let childMarker = "OPENCODE_TALK_CHILD"
+  guard ProcessInfo.processInfo.environment[childMarker] == nil else { return }
+
+  typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
+  let defaultHandle = UnsafeMutableRawPointer(bitPattern: -2)  // RTLD_DEFAULT
+  guard let symbol = dlsym(defaultHandle, "responsibility_spawnattrs_setdisclaim") else { return }
+  let disclaim = unsafeBitCast(symbol, to: Disclaim.self)
+
+  var attributes: posix_spawnattr_t?
+  posix_spawnattr_init(&attributes)
+  defer { posix_spawnattr_destroy(&attributes) }
+  _ = disclaim(&attributes, 1)
+
+  setenv(childMarker, "1", 1)
+  let path = Bundle.main.executablePath ?? CommandLine.arguments[0]
+  var argv: [UnsafeMutablePointer<CChar>?] = CommandLine.arguments.map { strdup($0) } + [nil]
+  defer { argv.forEach { free($0) } }
+
+  var pid: pid_t = 0
+  guard posix_spawn(&pid, path, nil, &attributes, &argv, environ) == 0 else { return }
+  relaunchedChild = pid
+
+  for sig in [SIGINT, SIGTERM, SIGHUP] {
+    signal(sig) { received in
+      kill(relaunchedChild, SIGTERM)
+      _exit(128 + received)
+    }
+  }
+
+  var status: Int32 = 0
+  while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+  let exited = (status & 0x7f) == 0
+  exit(exited ? (status >> 8) & 0xff : 1)
 }
 
-func authorize() {
-  let sem = DispatchSemaphore(value: 0)
-  var speechOK = false
-  SFSpeechRecognizer.requestAuthorization { status in
-    speechOK = status == .authorized
-    sem.signal()
+// MARK: - Arguments
+
+struct Options {
+  var command = "listen"
+  var language = Locale.current.identifier.components(separatedBy: "@")[0]
+  var hints: [String] = []
+  var positional: [String] = []
+
+  init(_ arguments: [String]) {
+    var rest = arguments[...]
+    if let first = rest.first, !first.hasPrefix("--") {
+      command = first
+      rest = rest.dropFirst()
+    }
+    while let flag = rest.popFirst() {
+      guard flag.hasPrefix("--") else {
+        positional.append(flag)
+        continue
+      }
+      guard let value = rest.popFirst() else { break }
+      switch flag {
+      case "--lang": language = value
+      case "--hint": hints.append(value)
+      default: break
+      }
+    }
   }
-  sem.wait()
-  guard speechOK else {
+}
+
+// MARK: - Permissions
+
+func authorize() async {
+  let speech = await withCheckedContinuation { continuation in
+    SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+  }
+  guard speech == .authorized else {
     fail("Speech recognition not allowed. Enable it in System Settings → Privacy & Security → Speech Recognition.")
   }
-  var micOK = false
-  AVCaptureDevice.requestAccess(for: .audio) { ok in
-    micOK = ok
-    sem.signal()
-  }
-  sem.wait()
-  guard micOK else {
-    fail("Microphone not allowed. Enable it for your terminal in System Settings → Privacy & Security → Microphone.")
+  guard await AVCaptureDevice.requestAccess(for: .audio) else {
+    fail("Microphone not allowed. Enable it in System Settings → Privacy & Security → Microphone.")
   }
 }
 
-guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: lang)) else {
-  fail("No speech recognizer for language \(lang)")
+// MARK: - Live listening
+
+/// `SFSpeechAudioBufferRecognitionRequest` is thread-safe for appending audio,
+/// but isn't annotated as Sendable. The audio tap runs on a realtime thread.
+final class AudioSink: @unchecked Sendable {
+  let request: SFSpeechAudioBufferRecognitionRequest
+  init(_ request: SFSpeechAudioBufferRecognitionRequest) { self.request = request }
+  func append(_ buffer: AVAudioPCMBuffer) { request.append(buffer) }
 }
 
-if command == "check" {
-  authorize()
-  emit([
-    "event": "ok",
-    "lang": lang,
-    "onDevice": recognizer.supportsOnDeviceRecognition ? "true" : "false",
-  ])
-  exit(0)
+@MainActor
+final class Listener {
+  private let recognizer: SFSpeechRecognizer
+  private let engine = AVAudioEngine()
+  private let sink: AudioSink
+  private var task: SFSpeechRecognitionTask?
+  private var lastText = ""
+  private var finished = false
+
+  init(recognizer: SFSpeechRecognizer, hints: [String]) {
+    self.recognizer = recognizer
+    let request = SFSpeechAudioBufferRecognitionRequest()
+    request.shouldReportPartialResults = true
+    request.contextualStrings = hints
+    request.addsPunctuation = true
+    if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+    sink = AudioSink(request)
+  }
+
+  func start() {
+    let input = engine.inputNode
+    input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0), block: Self.tap(into: sink))
+    task = recognizer.recognitionTask(with: sink.request, resultHandler: Self.results(to: self))
+
+    do {
+      engine.prepare()
+      try engine.start()
+    } catch {
+      fail("Could not start microphone: \(error.localizedDescription)")
+    }
+    emit(["event": "ready"])
+  }
+
+  // Audio and recognition callbacks arrive on background threads. They're
+  // built in nonisolated functions so they don't inherit main-actor isolation
+  // (which Swift 6 enforces at runtime by trapping).
+
+  private nonisolated static func tap(into sink: AudioSink) -> AVAudioNodeTapBlock {
+    { @Sendable buffer, _ in sink.append(buffer) }
+  }
+
+  private nonisolated static func results(
+    to listener: Listener
+  ) -> @Sendable (SFSpeechRecognitionResult?, (any Error)?) -> Void {
+    { @Sendable result, error in
+      let text = result?.bestTranscription.formattedString
+      let isFinal = result?.isFinal ?? false
+      let failure = error.flatMap { ($0 as NSError).code == 1110 ? nil : $0.localizedDescription }
+      let ended = error != nil
+      Task { @MainActor in listener.handle(text: text, isFinal: isFinal, error: failure, ended: ended) }
+    }
+  }
+
+  /// Stops recording, then waits briefly for the recognizer's final result.
+  func stop() {
+    guard engine.isRunning else { return finish() }
+    engine.stop()
+    engine.inputNode.removeTap(onBus: 0)
+    sink.request.endAudio()
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(1500))
+      self.finish()
+    }
+  }
+
+  private func handle(text: String?, isFinal: Bool, error: String?, ended: Bool) {
+    if let text {
+      lastText = text
+      if isFinal { return finish() }
+      emit(["event": "partial", "text": text])
+    } else if ended {
+      // "No speech detected" (1110) ends with whatever we have; other errors
+      // while still recording are real failures.
+      if let error, engine.isRunning { fail(error) }
+      finish()
+    }
+  }
+
+  private func finish() {
+    guard !finished else { return }
+    finished = true
+    task?.cancel()
+    emit(["event": "final", "text": lastText])
+    exit(0)
+  }
 }
 
-if command == "transcribe" {
-  guard let path = positional.first else { fail("Usage: transcribe <audio-file>") }
-  authorize()
-  let req = SFSpeechURLRecognitionRequest(url: URL(fileURLWithPath: path))
-  req.contextualStrings = hints
-  req.addsPunctuation = true
-  if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-  let fileTask = recognizer.recognitionTask(with: req) { result, error in
+// MARK: - Lifecycle guards
+
+func installAbortSignals() {
+  for sig in [SIGINT, SIGTERM, SIGHUP] {
+    signal(sig) { received in _exit(128 + received) }
+  }
+}
+
+/// Exit if the process that started us goes away, and cap session length.
+@MainActor
+func startWatchdog(onTimeout: @escaping @MainActor () -> Void) {
+  let parent = getppid()
+  let started = ContinuousClock.now
+  Task { @MainActor in
+    while true {
+      try? await Task.sleep(for: .milliseconds(500))
+      if getppid() != parent { _exit(0) }
+      if ContinuousClock.now - started > .seconds(600) { onTimeout() }
+    }
+  }
+}
+
+/// Watches stdin for "stop" when it's a pipe or socket from the plugin.
+/// (/dev/null or a TTY would otherwise stop immediately or never.)
+func watchStdin(onStop: @escaping @Sendable () -> Void) {
+  var info = stat()
+  guard fstat(STDIN_FILENO, &info) == 0, [S_IFIFO, S_IFSOCK].contains(info.st_mode & S_IFMT) else { return }
+  Thread {
+    while let line = readLine() {
+      if line.trimmingCharacters(in: .whitespaces) == "stop" { break }
+    }
+    onStop()
+  }.start()
+}
+
+// MARK: - Commands
+
+func transcribe(file path: String, recognizer: SFSpeechRecognizer, hints: [String]) async -> Never {
+  let request = SFSpeechURLRecognitionRequest(url: URL(fileURLWithPath: path))
+  request.contextualStrings = hints
+  request.addsPunctuation = true
+  if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+
+  recognizer.recognitionTask(with: request, resultHandler: fileResults())
+  await runForever()
+}
+
+private func fileResults() -> @Sendable (SFSpeechRecognitionResult?, (any Error)?) -> Void {
+  { @Sendable result, error in
     if let result, result.isFinal {
       emit(["event": "final", "text": result.bestTranscription.formattedString])
       exit(0)
@@ -126,95 +274,47 @@ if command == "transcribe" {
       fail(error.localizedDescription)
     }
   }
-  _ = fileTask
-  dispatchMain()
 }
 
-guard command == "listen" else { fail("Unknown command: \(command)") }
-
-authorize()
-guard recognizer.isAvailable else { fail("Speech recognizer is not available right now") }
-
-let request = SFSpeechAudioBufferRecognitionRequest()
-request.shouldReportPartialResults = true
-request.contextualStrings = hints
-request.addsPunctuation = true
-if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
-
-let engine = AVAudioEngine()
-let input = engine.inputNode
-let format = input.outputFormat(forBus: 0)
-input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-  request.append(buffer)
+/// Keeps the process alive; every command ends by calling exit().
+func runForever() async -> Never {
+  while true { try? await Task.sleep(for: .seconds(3600)) }
 }
 
-var lastText = ""
-var finished = false
+// MARK: - Main
 
-func finish() {
-  if finished { return }
-  finished = true
-  emit(["event": "final", "text": lastText])
+relaunchAsResponsible()
+
+let options = Options(Array(CommandLine.arguments.dropFirst()))
+guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: options.language)) else {
+  fail("No speech recognizer for language \(options.language)")
+}
+
+switch options.command {
+case "check":
+  await authorize()
+  emit([
+    "event": "ok",
+    "lang": options.language,
+    "onDevice": String(recognizer.supportsOnDeviceRecognition),
+  ])
   exit(0)
-}
 
-func stopListening() {
-  if !engine.isRunning { return }
-  engine.stop()
-  input.removeTap(onBus: 0)
-  request.endAudio()
-  // Give the recognizer a moment to deliver the final result.
-  DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { finish() }
-}
+case "transcribe":
+  guard let path = options.positional.first else { fail("Usage: transcribe <audio-file>") }
+  await authorize()
+  await transcribe(file: path, recognizer: recognizer, hints: options.hints)
 
-let task = recognizer.recognitionTask(with: request) { result, error in
-  if let result {
-    let text = result.bestTranscription.formattedString
-    DispatchQueue.main.async {
-      lastText = text
-      if result.isFinal { finish() } else { emit(["event": "partial", "text": text]) }
-    }
-  } else if let error {
-    DispatchQueue.main.async {
-      if engine.isRunning || lastText.isEmpty {
-        // "No speech detected" ends with empty text rather than an error.
-        let ns = error as NSError
-        if ns.code == 1110 || ns.code == 301 { finish() }
-        emit(["event": "error", "message": error.localizedDescription])
-        exit(1)
-      }
-      finish()
-    }
-  }
-}
-_ = task
+case "listen":
+  await authorize()
+  guard recognizer.isAvailable else { fail("Speech recognizer is not available right now") }
+  installAbortSignals()
+  let listener = Listener(recognizer: recognizer, hints: options.hints)
+  listener.start()
+  startWatchdog { listener.stop() }
+  watchStdin { Task { @MainActor in listener.stop() } }
+  await runForever()
 
-do {
-  engine.prepare()
-  try engine.start()
-} catch {
-  fail("Could not start microphone: \(error.localizedDescription)")
+default:
+  fail("Unknown command: \(options.command)")
 }
-emit(["event": "ready"])
-
-signal(SIGINT, SIG_IGN)
-signal(SIGTERM, SIG_IGN)
-for sig in [SIGINT, SIGTERM] {
-  let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-  src.setEventHandler { stopListening() }
-  src.resume()
-  _ = Unmanaged.passRetained(src)
-}
-
-// Only watch stdin when it is a pipe/socket from the plugin; /dev/null would stop instantly.
-var st = stat()
-if fstat(0, &st) == 0 && [S_IFIFO, S_IFSOCK].contains(st.st_mode & S_IFMT) {
-  Thread {
-    while let line = readLine() {
-      if line.trimmingCharacters(in: .whitespaces) == "stop" { break }
-    }
-    DispatchQueue.main.async { stopListening() }
-  }.start()
-}
-
-dispatchMain()

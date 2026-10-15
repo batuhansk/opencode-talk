@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")/.."
 mkdir -p bin
 for arch in arm64 x86_64; do
-  swiftc -O -target "$arch-apple-macos13" helper/main.swift \
+  swiftc -O -swift-version 6 -warnings-as-errors -target "$arch-apple-macos13" helper/main.swift \
     -o "bin/helper-$arch" \
     -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker helper/Info.plist
 done

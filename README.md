@@ -33,12 +33,12 @@ Restart OpenCode. The first time you talk, macOS asks for **Microphone** and
 
 One key does everything: **`ctrl+g`** (or `/talk`).
 
-| Do this                | What happens                                          |
-| ---------------------- | ----------------------------------------------------- |
-| **Hold** `ctrl+g`      | Talk while holding, release to insert                 |
-| **Tap** `ctrl+g`       | Start listening; tap again or pause ~2 s to insert    |
-| `esc`                  | Cancel while listening                                |
-| Say **"send it"**      | Insert and submit in one go                           |
+| Do this           | What happens                                       |
+| ----------------- | -------------------------------------------------- |
+| **Hold** `ctrl+g` | Talk while holding, release to insert              |
+| **Tap** `ctrl+g`  | Start listening; tap again or pause ~2 s to insert |
+| `esc`             | Cancel while listening                             |
+| Say **"send it"** | Insert and submit in one go                        |
 
 While you talk, a live `● 0:03 …your words…` line shows in the prompt footer.
 The cleaned text is inserted at your cursor so you can review it before
@@ -99,11 +99,14 @@ Write `stop` to stdin to finish.
 ## Development
 
 ```bash
-npm run build   # builds bin/opencode-talk-helper (universal, ad-hoc signed)
-npm test
+npm run build   # builds bin/opencode-talk-helper (universal, Swift 6 strict, ad-hoc signed)
+npm test        # cleanup rules, push-to-talk logic, and helper integration tests
 bin/opencode-talk-helper check                 # permissions + on-device support
 bin/opencode-talk-helper transcribe clip.aiff  # transcribe a file
 ```
+
+The helper is compiled with `-swift-version 6 -warnings-as-errors`, so
+concurrency issues fail the build.
 
 Test a local checkout by pointing `cli.json` at the folder:
 `"plugins": ["/path/to/opencode-talk"]`.
