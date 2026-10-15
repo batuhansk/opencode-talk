@@ -26,21 +26,24 @@ Requires OpenCode 2. Add it to `~/.config/opencode/cli.json`:
 Restart OpenCode. The first time you talk, macOS asks for **Microphone** and
 **Speech Recognition** access for `opencode-talk-helper`. Allow both.
 
-> Requires macOS 13+. For best results, turn on on-device dictation in
+> Requires macOS 14+. For best results, turn on on-device dictation in
 > System Settings → Keyboard → Dictation (downloads Apple's language model once).
 
 ## Use
 
-One key does everything: **`ctrl+g`** (or `/talk`).
+One key does everything: **`ctrl+g`** (or `ctrl+x v`, or `/talk`).
 
-| Do this           | What happens                                       |
-| ----------------- | -------------------------------------------------- |
-| **Hold** `ctrl+g` | Talk while holding, release to insert              |
-| **Tap** `ctrl+g`  | Start listening; tap again or pause ~2 s to insert |
-| `esc`             | Cancel while listening                             |
-| Say **"send it"** | Insert and submit in one go                        |
+| Do this           | What happens                                            |
+| ----------------- | ------------------------------------------------------- |
+| **Hold** `ctrl+g` | Talk while holding, release to insert                   |
+| **Tap** `ctrl+g`  | Start listening; tap again or pause ~2 s to insert      |
+| `ctrl+x v`        | Same as tapping; use this in Warp, which takes `ctrl+g` |
+| `esc`             | Cancel while listening                                  |
+| Say **"send it"** | Insert and submit in one go                             |
 
-While you talk, a live `● 0:03 …your words…` line shows in the prompt footer.
+While you talk, a live `● 0:03 ▂▅▃▁ …your words…` line shows in the prompt footer.
+The bars are the microphone level, so you can see it hears you. If the mic
+picks up no sound at all (for example AirPods in their case), you get a warning.
 The cleaned text is inserted at your cursor so you can review it before
 pressing Enter. If the prompt box isn't focused, the text goes to the clipboard.
 
@@ -64,7 +67,8 @@ These terms are also sent to Apple's recognizer as hints, which improves accurac
     {
       "package": "opencode-talk",
       "options": {
-        "keybind": "ctrl+g",
+        "keybind": "ctrl+g,<leader>v",
+        "mic": "MacBook",
         "autoSend": false,
         "silenceStop": 2,
         "lang": "en-US",
@@ -75,7 +79,8 @@ These terms are also sent to Apple's recognizer as hints, which improves accurac
 }
 ```
 
-- `keybind`: talk key (default `ctrl+g`). Use a single chord so holding works.
+- `keybind`: talk keys, comma-separated (default `ctrl+g,<leader>v`). Holding only works with a single chord like `ctrl+g`.
+- `mic`: microphone to use, by name fragment, e.g. `"MacBook"` or `"AirPods"` (default: system input). List them with `bin/opencode-talk-helper mics`.
 - `autoSend`: submit right after inserting (default `false`)
 - `silenceStop`: seconds of silence before auto-stopping in tap mode; `0` disables (default `2`)
 - `lang`: recognition language, e.g. `en-US`, `de-DE` (default: your system language)
@@ -86,7 +91,7 @@ These terms are also sent to Apple's recognizer as hints, which improves accurac
 
 ```
 OpenCode TUI ──► plugin (JS) ──spawn──► opencode-talk-helper (Swift)
-                    ▲                        │ AVAudioEngine + SFSpeechRecognizer
+                    ▲                        │ AVCaptureSession + SFSpeechRecognizer
                     └──── JSON lines ◄───────┘ (on-device)
 ```
 
@@ -102,6 +107,7 @@ Write `stop` to stdin to finish.
 npm run build   # builds bin/opencode-talk-helper (universal, Swift 6 strict, ad-hoc signed)
 npm test        # cleanup rules, push-to-talk logic, and helper integration tests
 bin/opencode-talk-helper check                 # permissions + on-device support
+bin/opencode-talk-helper mics                  # list microphones
 bin/opencode-talk-helper transcribe clip.aiff  # transcribe a file
 ```
 

@@ -41,6 +41,16 @@ test("rejects unknown commands and missing arguments", { skip }, () => {
   assert.equal(run("transcribe").out[0].message, "Usage: transcribe <audio-file>")
 })
 
+test("lists microphones and rejects unknown ones", { skip }, () => {
+  const { code, out } = run("mics")
+  assert.equal(code, 0)
+  assert.ok(out.length > 0 && out.every((m) => m.event === "mic" && m.name))
+  assert.equal(out.filter((m) => m.default === "true").length, 1)
+  const bad = run("listen", "--mic", "no-such-mic-xyz")
+  assert.equal(bad.code, 1)
+  assert.match(bad.out[0].message, /No microphone matching/)
+})
+
 test("transcribes a spoken clip on-device, using hints", { skip }, () => {
   const dir = mkdtempSync(path.join(tmpdir(), "opencode-talk-"))
   try {
@@ -60,7 +70,8 @@ test("stop returns a final result and leaves no processes", { skip }, async () =
   const events = []
   await new Promise((resolve, reject) => {
     const s = startListening({
-      onReady: () => (events.push("ready"), setTimeout(() => s.stop(), 800)),
+      onReady: (info) => (events.push("ready"), assert.ok(info.mic), setTimeout(() => s.stop(), 800)),
+      onLevel: (v) => assert.ok(v >= 0 && v <= 1),
       onFinal: (text) => (events.push(typeof text), resolve()),
       onError: reject,
     })
