@@ -121,6 +121,25 @@ concurrency issues fail the build.
 Test a local checkout by pointing `cli.json` at the folder:
 `"plugins": ["/path/to/opencode-talk"]`.
 
+## Releasing
+
+GitHub Actions does the work:
+
+- **CI** (every push and PR): builds the helper on macOS 14 and 15, verifies it's
+  a signed universal binary, runs tests, checks formatting and package contents.
+- **Release** (on a `v*` tag): checks the tag matches `package.json`, builds,
+  tests, publishes to npm with provenance, and creates a GitHub Release with
+  the helper binary attached and notes from `CHANGELOG.md`.
+
+```bash
+npm version patch        # or minor/major; updates package.json and tags
+git push --follow-tags   # triggers the Release workflow
+```
+
+One-time setup: on npmjs.com, add this repo as a trusted publisher for
+`opencode-talk` (workflow `release.yml`, environment `npm`), or add an
+`NPM_TOKEN` repository secret.
+
 ## Roadmap
 
 - Windows helper (WinRT `Windows.Media.SpeechRecognition`), same protocol

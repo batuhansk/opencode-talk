@@ -4,10 +4,24 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    runs-on: macos-15
+    name: macOS ${{ matrix.macos }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 14 is the minimum supported version; 15 is current.
+        macos: [14, 15]
+    runs-on: macos-${{ matrix.macos }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,8 +29,15 @@ jobs:
           node-version: 22
       - name: Build helper (Swift 6, warnings as errors)
         run: npm run build
+      - name: Verify helper
+        run: |
+          lipo -archs bin/opencode-talk-helper | grep -q "x86_64 arm64"
+          codesign --verify bin/opencode-talk-helper
+          bin/opencode-talk-helper bogus | grep -q "Unknown command"
       - name: Test
         # Helper integration tests skip here: CI can't grant speech permission.
         run: npm test
       - name: Check formatting
         run: npx -y prettier@3 --check .
+      - name: Check package contents
+        run: npm pack --dry-run --ignore-scripts
