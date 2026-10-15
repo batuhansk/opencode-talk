@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.opencode-talk.helper</string>
+  <key>CFBundleName</key>
+  <string>opencode-talk-helper</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>opencode-talk listens to your voice so you can speak prompts to OpenCode.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>opencode-talk turns your speech into text on this Mac.</string>
+</dict>
+</plist>

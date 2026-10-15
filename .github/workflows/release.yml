@@ -1,0 +1,61 @@
+name: Release
+
+# Push a tag like v0.1.0 (matching package.json "version") to publish.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # npm provenance / trusted publishing
+
+jobs:
+  release:
+    runs-on: macos-26
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Check tag matches package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Build helper
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Publish to npm
+        # Uses npm trusted publishing (no token) if configured on npmjs.com,
+        # otherwise the NPM_TOKEN repository secret. Skipped if this version
+        # was already published by hand.
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if npm view "opencode-talk@$version" version >/dev/null 2>&1; then
+            echo "opencode-talk@$version is already on npm; skipping publish"
+          else
+            npm publish --provenance --access public --ignore-scripts
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        run: |
+          cp bin/opencode-talk-helper opencode-talk-helper-macos-universal
+          notes=$(awk -v v="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## " v { found=1; next }
+            found && /^## / { exit }
+            found { print }' CHANGELOG.md)
+          gh release create "$GITHUB_REF_NAME" opencode-talk-helper-macos-universal \
+            --title "$GITHUB_REF_NAME" --notes "${notes:-See CHANGELOG.md}"
+        env:
+          GH_TOKEN: ${{ github.token }}

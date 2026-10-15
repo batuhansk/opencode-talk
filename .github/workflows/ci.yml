@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The helper needs the macOS 26 SDK (Xcode 26) to compile, but runs on macOS 14+.
+  build:
+    name: Build helper (Xcode 26)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build (Swift 6, warnings as errors)
+        run: |
+          xcrun swiftc --version
+          npm run build
+      - name: Verify binary
+        run: |
+          lipo -archs bin/opencode-talk-helper | grep -q "x86_64 arm64"
+          codesign --verify bin/opencode-talk-helper
+          otool -l bin/opencode-talk-helper | grep -A3 LC_BUILD_VERSION | grep -q "minos 14.0"
+      - name: Check formatting
+        run: npx -y prettier@3 --check .
+      - name: Check package contents
+        run: npm pack --dry-run --ignore-scripts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helper
+          path: bin/opencode-talk-helper
+
+  # Run the same binary on every supported macOS version.
+  test:
+    name: Test on macOS ${{ matrix.macos }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        macos: [14, 15, 26]
+    runs-on: macos-${{ matrix.macos }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: helper
+          path: bin
+      - run: chmod +x bin/opencode-talk-helper
+      - name: Helper starts and answers on this macOS
+        run: |
+          sw_vers -productVersion
+          bin/opencode-talk-helper bogus | grep -q "Unknown command"
+          bin/opencode-talk-helper languages --lang en-US | tee /dev/stderr | grep -q '"supported":"true"'
+          bin/opencode-talk-helper mics
+      - name: Test
+        # Tests needing speech permission skip here; CI can't grant it.
+        run: npm test
