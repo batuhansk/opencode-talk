@@ -330,7 +330,7 @@ prompt names the helper and works from any terminal.
 ```bash
 git clone https://github.com/batuhansk/opencode-talk && cd opencode-talk
 npm run build   # universal helper binary, Swift 6 strict, warnings as errors
-npm test        # cleanup rules, live preview, push-to-talk, helper end-to-end
+npm test        # cleanup, live preview, push-to-talk, languages, plugin, helper end-to-end
 ```
 
 Point `cli.json` at your checkout to try it in OpenCode:
