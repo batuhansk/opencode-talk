@@ -1,29 +1,17 @@
 <div align="center">
 
-# 🎙 opencode-talk
+<img src="https://raw.githubusercontent.com/batuhansk/opencode-talk/main/docs/header.png" alt="opencode-talk: talk instead of type. A voice waveform turns into code and flows into a terminal prompt." width="100%">
 
 **Talk instead of type in [OpenCode](https://opencode.ai/).**
 
 Hold a key, say your prompt, let go. Your words appear in the prompt box as you speak.<br>
 No downloads. No API keys. No extra programs. Recognized on-device.
 
-[![CI](https://github.com/batuhansk/opencode-talk/actions/workflows/ci.yml/badge.svg)](https://github.com/batuhansk/opencode-talk/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/opencode-talk)](https://www.npmjs.com/package/opencode-talk)
-![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)
-![OpenCode 2](https://img.shields.io/badge/OpenCode-2-blue)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/batuhansk/opencode-talk/actions/workflows/ci.yml/badge.svg)](https://github.com/batuhansk/opencode-talk/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/opencode-talk)](https://www.npmjs.com/package/opencode-talk) ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple) ![OpenCode 2](https://img.shields.io/badge/OpenCode-2-blue) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
 
-<!-- TODO: replace with a short screen recording (docs/demo.gif) of holding ctrl+y and talking -->
-
-```text
-┌──────────────────────────────────────────────────────────────┐
-│ Add a null check to the JSON parser▌                         │
-│ Build · Claude Opus 5.5 Anthropic · low                      │
-└──────────────────────────────────────────────────────────────┘
- ● 0:04 ▂▅▇▃ release to insert
-```
+<!-- Optional: add a short screen recording (docs/demo.gif) of holding ctrl+y and talking. -->
 
 ## Contents
 

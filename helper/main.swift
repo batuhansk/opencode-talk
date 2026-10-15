@@ -440,7 +440,7 @@ final class Listener {
     }
 
     if let testFile {
-      streamTestFile(testFile, feed: feed)
+      streamTestFile(testFile)
       return
     }
 
@@ -467,7 +467,7 @@ final class Listener {
 
   /// Plays an audio file through the same pipeline as the microphone, in real
   /// time, then stops. Used by the integration tests.
-  private func streamTestFile(_ path: String, feed: @escaping @Sendable (CMSampleBuffer) -> Void) {
+  private func streamTestFile(_ path: String) {
     guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path)) else { fail("Cannot read \(path)") }
     emit(["event": "ready", "mic": "file", "engine": engineName.rawValue])
     let pcmFeed: (@Sendable (AVAudioPCMBuffer) -> Void)?
@@ -476,7 +476,6 @@ final class Listener {
     case .dictation(let boxed):
       if #available(macOS 26.0, *), let dictation = boxed as? DictationEngine { pcmFeed = { dictation.feed($0) } } else { pcmFeed = nil }
     }
-    _ = feed
     let format = file.processingFormat
     let chunk = AVAudioFrameCount(format.sampleRate / 10)  // 100 ms
     let source = file
