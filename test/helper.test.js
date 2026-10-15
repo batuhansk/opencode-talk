@@ -132,6 +132,48 @@ for (const engine of ["legacy", "dictation"]) {
   )
 }
 
+// Real recordings start with silence and contain pauses. Regression tests for
+// text repeated on release (macOS 26) and sentences lost after a pause (legacy).
+for (const engine of ["dictation", "legacy"]) {
+  const engineSkip = skip || (engine === "dictation" && !hasDictation && "needs macOS 26 dictation model")
+
+  test(
+    `leading silence doesn't repeat the text on release (${engine})`,
+    { skip: engineSkip, timeout: 30000 },
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "opencode-talk-"))
+      try {
+        const clip = path.join(dir, "clip.aiff")
+        execFileSync("say", ["-v", "Samantha", "-o", clip, "[[slnc 1500]] hello how are you [[slnc 800]]"])
+        const { partials, text } = await listenToClip(clip, engine)
+        const twice = /(hello.*){2}/i
+        assert.doesNotMatch(text, twice)
+        for (const p of partials) assert.doesNotMatch(p, twice, `partial repeated: ${p}`)
+        assert.match(text, /hello,? how are you/i)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test(`keeps every sentence across pauses (${engine})`, { skip: engineSkip, timeout: 30000 }, async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "opencode-talk-"))
+    try {
+      const clip = path.join(dir, "clip.aiff")
+      const speech =
+        "[[slnc 1000]] first open the readme. [[slnc 1800]] then run the tests. [[slnc 1800]] finally fix anything that fails. [[slnc 600]]"
+      execFileSync("say", ["-v", "Samantha", "-o", clip, speech])
+      const { text } = await listenToClip(clip, engine)
+      assert.match(text, /first/i)
+      assert.match(text, /run the tests?/i)
+      assert.match(text, /fails/i)
+      assert.doesNotMatch(text, /(first.*){2}|(fails.*){2}/i)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+}
+
 test("prepare reports the engine for each language", { skip }, async () => {
   const events = await prepareEngine(["en-US"])
   assert.equal(events.length, 1)

@@ -180,6 +180,26 @@ struct Transcript {
   var text: String { finalized.trimmingCharacters(in: .whitespaces) }
 }
 
+/// Joins the legacy recognizer's utterances: finished ones are kept, and the
+/// current draft is shown after them.
+struct LegacyTranscript {
+  private var finished: [String] = []
+  private var draft = ""
+
+  mutating func apply(_ text: String, finished done: Bool) {
+    if done {
+      finished.append(text)
+      draft = ""
+    } else {
+      draft = text
+    }
+  }
+
+  var text: String {
+    (finished + [draft]).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+  }
+}
+
 /// Receives microphone audio on a capture queue and hands it to the engine.
 /// Also reports the input level so the UI can show the mic hears something.
 final class AudioSink: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
@@ -235,11 +255,14 @@ final class LegacyEngine: @unchecked Sendable {
     { @Sendable result, error in
       let text = result?.bestTranscription.formattedString
       let isFinal = result?.isFinal ?? false
+      // Drafts carry no timings. A result with real timings is a finished
+      // utterance; after a pause the recognizer starts a fresh transcript.
+      let finished = result?.bestTranscription.segments.contains { $0.duration > 0 } ?? false
       let failure = error.flatMap { ($0 as NSError).code == 1110 ? nil : $0.localizedDescription }
       let ended = error != nil
       Task { @MainActor in
         if let text {
-          listener.update(Transcript(finalized: text), isFinal: isFinal)
+          listener.legacyResult(text, finished: finished, isFinal: isFinal)
         } else if ended {
           // "No speech detected" (1110) just ends with whatever we have.
           listener.ended(error: failure)
@@ -276,21 +299,33 @@ enum DictationAssets {
   }
 }
 
-/// Stitches analyzer results into one transcript. Each result covers a time
-/// range and supersedes any earlier text from its start onward (volatile
-/// results get revised; `isFinal` alone isn't reliable for dictation).
+/// Stitches analyzer results into one transcript.
+///
+/// Each result covers a time range of audio. A newer result replaces every
+/// earlier one it overlaps: drafts ("volatile" results) get revised, and the
+/// final result often starts later than the drafts because it trims leading
+/// silence (e.g. drafts 0.0–2.9 s, final 1.4–3.6 s for the same words).
 @available(macOS 26.0, *)
-struct SegmentedTranscript {
-  private var segments: [(start: CMTime, text: String)] = []
+final class SegmentedTranscript {
+  private var segments: [(range: CMTimeRange, text: String)] = []
 
-  mutating func apply(_ result: DictationTranscriber.Result) {
-    let start = result.range.start
-    segments.removeAll { CMTimeCompare($0.start, start) >= 0 }
-    segments.append((start, String(result.text.characters)))
+  func apply(_ result: DictationTranscriber.Result) {
+    apply(range: result.range, text: String(result.text.characters))
+  }
+
+  func apply(range: CMTimeRange, text: String) {
+    segments.removeAll { Self.overlaps($0.range, range) || CMTimeCompare($0.range.start, range.start) >= 0 }
+    segments.append((range, text))
+    segments.sort { CMTimeCompare($0.range.start, $1.range.start) < 0 }
   }
 
   var text: String {
     segments.map { $0.text.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+  }
+
+  private static func overlaps(_ a: CMTimeRange, _ b: CMTimeRange) -> Bool {
+    guard a.duration.isValid, b.duration.isValid else { return false }
+    return CMTimeCompare(a.start, b.end) < 0 && CMTimeCompare(b.start, a.end) < 0
   }
 }
 
@@ -328,10 +363,10 @@ final class DictationEngine: @unchecked Sendable {
 
     let results = transcriber.results
     resultsTask = Task { @MainActor in
-      var transcript = SegmentedTranscript()
+      let transcript = SegmentedTranscript()
       do {
         for try await result in results {
-          debug("result: \(String(result.text.characters))")
+          debug("result: \(String(result.text.characters)) range=\(result.range.start.seconds)+\(result.range.duration.seconds) final=\(result.isFinal)")
           transcript.apply(result)
           listener.update(Transcript(finalized: transcript.text), isFinal: false)
         }
@@ -530,6 +565,13 @@ final class Listener {
     }
   }
 
+  private var legacyTranscript = LegacyTranscript()
+
+  func legacyResult(_ text: String, finished: Bool, isFinal: Bool) {
+    legacyTranscript.apply(text, finished: finished || isFinal)
+    update(Transcript(finalized: legacyTranscript.text), isFinal: isFinal)
+  }
+
   func update(_ transcript: Transcript, isFinal: Bool) {
     guard !finished else { return }
     let text = transcript.text
@@ -679,6 +721,9 @@ private func fileResults() -> @Sendable (SFSpeechRecognitionResult?, (any Error)
   }
 }
 
+/// Holds the file analyzer for the lifetime of the `transcribe` command.
+nonisolated(unsafe) var fileAnalyzer: AnyObject?
+
 @available(macOS 26.0, *)
 func transcribeDictation(file path: String, locale: Locale, hints: [String]) async -> Never {
   do {
@@ -688,9 +733,9 @@ func transcribeDictation(file path: String, locale: Locale, hints: [String]) asy
     let file = try AVAudioFile(forReading: URL(fileURLWithPath: path))
     let analyzer = try await SpeechAnalyzer(
       inputAudioFile: file, modules: [transcriber], analysisContext: context, finishAfterFile: true)
-    var transcript = SegmentedTranscript()
+    fileAnalyzer = analyzer  // keep the analyzer alive while reading results
+    let transcript = SegmentedTranscript()
     for try await result in transcriber.results { transcript.apply(result) }
-    withExtendedLifetime(analyzer) {}  // keep the analyzer alive while reading results
     emit(["event": "final", "text": transcript.text, "engine": "dictation"])
     exit(0)
   } catch {
