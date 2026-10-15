@@ -180,7 +180,11 @@ test(
   },
 )
 
+// Only count helpers started by a test, not ones from a running OpenCode.
+const newHelpers = (before) => helperProcesses().filter((pid) => !before.includes(pid))
+
 test("stop returns a final result and leaves no processes", { skip }, async () => {
+  const before = helperProcesses()
   const events = []
   await new Promise((resolve, reject) => {
     const s = startListening({
@@ -192,13 +196,14 @@ test("stop returns a final result and leaves no processes", { skip }, async () =
   })
   assert.deepEqual(events, ["ready", "string"])
   await new Promise((r) => setTimeout(r, 300))
-  assert.deepEqual(helperProcesses(), [])
+  assert.deepEqual(newHelpers(before), [])
 })
 
 test("cancel kills the helper, including its relaunched child", { skip }, async () => {
+  const before = helperProcesses()
   await new Promise((resolve, reject) => {
     const s = startListening({ onReady: () => (s.cancel(), resolve()), onError: reject })
   })
   await new Promise((r) => setTimeout(r, 1000))
-  assert.deepEqual(helperProcesses(), [])
+  assert.deepEqual(newHelpers(before), [])
 })
