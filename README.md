@@ -15,6 +15,8 @@ No downloads. No API keys. No extra programs. Recognized on-device.
 
 </div>
 
+<!-- TODO: replace with a short screen recording (docs/demo.gif) of holding ctrl+y and talking -->
+
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │ Add a null check to the JSON parser▌                         │
@@ -227,24 +229,62 @@ on-device. `opencode-talk-helper check` shows `"onDevice":"true"` when yours is.
 
 ## How it works
 
-```text
-OpenCode 2 CLI
-  └─ tui.js           keys (ctrl+y, ctrl+x v, /talk, esc) · footer indicator
-       ├─ lib/live.js        types words into the prompt as they arrive
-       ├─ lib/ptt.js         tap vs. hold, from key repeats
-       ├─ lib/clean.js       coding terms, naming styles, punctuation, "send it"
-       ├─ lib/indicator.js   ● timer · level meter
-       └─ lib/helper.js ──spawn──▶ opencode-talk-helper (Swift 6)
-                          ◀─JSON──  microphone (AVCaptureSession)
-                                    → DictationTranscriber (macOS 26) or SFSpeechRecognizer
+```mermaid
+flowchart LR
+  you(["🧑 You"])
+  plugin["<b>Plugin</b><br/>in OpenCode 2"]
+  helper["<b>Native helper</b><br/>Swift 6 · microphone"]
+  engine{{"<b>On-device speech</b><br/>macOS 26: DictationTranscriber<br/>macOS 14+: SFSpeechRecognizer"}}
+  prompt[("Prompt box")]
+  footer["Footer<br/>● timer · level meter"]
+
+  you -- "hold ctrl+y" --> plugin
+  plugin <-- "JSON lines" --> helper
+  helper <-- "audio · text" --> engine
+  plugin -- "live words" --> prompt
+  plugin --> footer
 ```
 
-The helper speaks JSON lines on stdout (`ready`, `level`, `partial`, `final`,
-`error`) and finishes when it reads `stop` on stdin. It never leaves the
-microphone on: signals end it immediately, it exits if its parent goes away,
-and every session is capped at 10 minutes.
+| Part                | Does                                                              |
+| ------------------- | ----------------------------------------------------------------- |
+| `tui.js`            | Keys, footer indicator, wiring                                    |
+| `lib/live.js`       | Types words into the prompt as they arrive; backs off if you edit |
+| `lib/clean.js`      | Coding terms, naming styles, spoken punctuation, "send it"        |
+| `lib/ptt.js`        | Tells tap from hold using key repeats                             |
+| `lib/helper.js`     | Starts the helper and reads its JSON events                       |
+| `helper/main.swift` | Microphone capture and speech recognition                         |
 
-It relaunches itself as its own "responsible" process so the macOS permission
+What happens when you hold the key:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor You
+  participant P as Plugin
+  participant H as Helper
+  participant M as Speech engine
+  participant B as Prompt box
+
+  You->>P: hold ctrl+y
+  P->>H: start (spawn)
+  H->>M: microphone audio
+  H-->>P: ready, level…
+  loop while you speak
+    M-->>H: revised text
+    H-->>P: partial
+    P->>P: clean up ("jason" → JSON)
+    P->>B: replace only what changed
+  end
+  You->>P: release ctrl+y
+  P->>H: stop
+  H-->>P: final
+  P->>B: final cleaned text
+  Note over P,B: "send it" at the end also submits
+```
+
+The helper never leaves the microphone on: signals end it immediately, it
+exits if its parent goes away, and every session is capped at 10 minutes. It
+relaunches itself as its own "responsible" process so the macOS permission
 prompt names the helper and works from any terminal.
 
 ## Development
