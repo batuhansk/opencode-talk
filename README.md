@@ -5,7 +5,7 @@
 **Talk instead of type in [OpenCode](https://opencode.ai/).**
 
 Hold a key, say your prompt, let go. Your words appear in the prompt box as you speak.<br>
-No downloads. No API keys. No extra programs. Recognized on-device.
+No downloads. No API keys. No extra programs. 60+ languages, recognized on-device.
 
 [![CI](https://github.com/batuhansk/opencode-talk/actions/workflows/ci.yml/badge.svg)](https://github.com/batuhansk/opencode-talk/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/opencode-talk)](https://www.npmjs.com/package/opencode-talk) ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple) ![OpenCode 2](https://img.shields.io/badge/OpenCode-2-blue) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -15,6 +15,7 @@ No downloads. No API keys. No extra programs. Recognized on-device.
 
 ## Contents
 
+- [Features](#features)
 - [Why](#why)
 - [Install](#install)
 - [Use](#use)
@@ -22,6 +23,7 @@ No downloads. No API keys. No extra programs. Recognized on-device.
 - [Languages](#languages)
 - [Options](#options)
 - [Speech engines](#speech-engines)
+- [Limitations](#limitations)
 - [Troubleshooting](#troubleshooting)
 - [Privacy](#privacy)
 - [How it works](#how-it-works)
@@ -29,19 +31,31 @@ No downloads. No API keys. No extra programs. Recognized on-device.
 - [Releasing](#releasing)
 - [Roadmap](#roadmap)
 
+## Features
+
+- 🎙 **Hold or tap to talk.** `ctrl+y` (hold to talk, or tap and pause), `ctrl+x v`, or `/talk`. `esc` cancels.
+- ⚡ **Words appear as you speak**, right at your cursor, and get corrected as you go. Your own edits are never overwritten.
+- 🧠 **Talks like a developer.** "jason" → JSON, "camel case get user" → `getUser`, spoken punctuation, filler words removed. No AI call.
+- 🌍 **60+ languages.** Uses your macOS languages by default; switch with `/talk:language` or add any language your Mac supports.
+- 🔒 **Private by default.** Recognition runs on your Mac; audio never leaves it unless you allow it.
+- 🗣 **Natural dictation.** Pause between sentences and keep going; every sentence is kept. Say "send it" to submit.
+- 📶 **Clear feedback.** The footer shows a timer, mic level, language and what to press next; a warning tells you if the mic hears nothing.
+- 🪶 **Zero setup.** One plugin line. No Homebrew packages, models or keys. Apple's newer engine on macOS 26 is used automatically.
+
 ## Why
 
 Most voice setups for coding tools need whisper.cpp, sox, a ~600 MB model and an
 LLM call on every prompt. opencode-talk uses the speech recognition already built
 into macOS and cleans up coding terms with fast local rules.
 
-|                              | opencode-talk          | Typical whisper-based plugin      |
-| ---------------------------- | ---------------------- | --------------------------------- |
-| Install                      | One plugin line        | Homebrew packages, Python, models |
-| Download size                | ~225 kB package        | ~700 MB                           |
-| API key / per-prompt AI call | None                   | Usually                           |
-| Words appear while you speak | Yes, in the prompt box | No (record, then transcribe)      |
-| Works offline                | Yes                    | Depends                           |
+|                              | opencode-talk             | Typical whisper-based plugin      |
+| ---------------------------- | ------------------------- | --------------------------------- |
+| Install                      | One plugin line           | Homebrew packages, Python, models |
+| Download size                | ~225 kB package           | ~700 MB                           |
+| API key / per-prompt AI call | None                      | Usually                           |
+| Words appear while you speak | Yes, in the prompt box    | No (record, then transcribe)      |
+| Languages                    | 60+, switch any time      | Depends on the model              |
+| Works offline                | Yes, on-device by default | Depends                           |
 
 ## Install
 
@@ -59,23 +73,28 @@ Add the plugin to `~/.config/opencode/cli.json`:
 Restart OpenCode. The first time you talk, macOS asks to allow **Microphone** and
 **Speech Recognition** for `opencode-talk-helper`. Allow both.
 
+That's all the setup there is. It listens in your macOS language; see
+[Languages](#languages) to add or switch languages.
+
 ## Use
 
-| Do this                       | What happens                                 |
-| ----------------------------- | -------------------------------------------- |
-| **Hold** `ctrl+y`             | Talk while holding; release to finish        |
-| **Tap** `ctrl+y`              | Start; press again, or pause ~2 s, to finish |
-| `ctrl+x` then `v`, or `/talk` | Same as tapping (no hold)                    |
-| `esc`                         | Cancel and remove what was said              |
-| `/talk:language`              | Switch the language you speak                |
-| End with **"send it"**        | Finish and submit in one go                  |
+| Do this                       | What happens                                      |
+| ----------------------------- | ------------------------------------------------- |
+| **Hold** `ctrl+y`             | Talk while holding; release to finish             |
+| **Tap** `ctrl+y`              | Start; press again, or pause ~2 s, to finish      |
+| `ctrl+x` then `v`, or `/talk` | Same as tapping (no hold)                         |
+| `esc`                         | Cancel and remove what was said                   |
+| `/talk:language`              | Switch the language you speak                     |
+| End with **"send it"**        | Finish and submit in one go ("gönder" in Turkish) |
 
 Your words appear **in the prompt box as you speak**, at your cursor, and get
-corrected as the recognizer refines them. When you finish, the cleaned-up text
-stays there so you can edit it before pressing Enter.
+corrected as the recognizer refines them. Pause between sentences as you like;
+every sentence is kept. When you finish, the cleaned-up text stays there so you
+can edit it before pressing Enter.
 
 The footer shows a timer, the microphone level and the active language, plus
-what to do next, so you always know the mic is hearing you:
+what to do next, so you always know the mic is hearing you. If the mic picks up
+no sound at all, you get a warning naming it.
 
 ```text
 ● 0:04 ▂▅▇▃ EN ctrl+y or pause to finish · esc cancels
@@ -200,6 +219,15 @@ On macOS 26 the plugin asks macOS to install the dictation model for each of
 your languages on start. If a language has no on-device legacy support, the
 model is downloaded before the first talk. Force an engine with the `engine` option.
 
+## Limitations
+
+- **macOS only** for now (14 Sonoma or later). Windows and Linux are on the [roadmap](#roadmap).
+- **One language at a time.** Apple's engines don't detect the spoken language; switch with `/talk:language`.
+- **Spoken punctuation** ("comma", "virgül") and "send it" exist in English and Turkish. Other languages keep the recognizer's own punctuation; coding terms are fixed in all.
+- **Hold-to-talk needs a single key** like `ctrl+y`. Two-step keys such as `ctrl+x v` work as tap only.
+- **Live text edits the prompt box directly**, because OpenCode doesn't yet have a plugin API for it. A future OpenCode update could require a plugin update.
+- **macOS may ask for permission again after updating** the plugin, until the helper is signed with an Apple Developer ID.
+
 ## Troubleshooting
 
 <details>
@@ -213,7 +241,8 @@ Watch the level meter in the footer while you talk.
   MacBook lid (which turns off the built-in mic). Pick another one with the
   `mic` option.
 - **Bars move, no words:** check System Settings → Privacy & Security →
-  Speech Recognition, and that `lang` matches the language you speak.
+  Speech Recognition, and that the footer shows the language you're speaking
+  (switch with `/talk:language`).
 
 </details>
 
@@ -293,7 +322,7 @@ flowchart LR
   helper["<b>Native helper</b><br/>Swift 6 · microphone"]
   engine{{"<b>On-device speech</b><br/>macOS 26: DictationTranscriber<br/>macOS 14+: SFSpeechRecognizer"}}
   prompt[("Prompt box")]
-  footer["Footer<br/>● timer · level meter"]
+  footer["Footer<br/>● timer · level · language"]
 
   you -- "hold ctrl+y" --> plugin
   plugin <-- "JSON lines" --> helper
@@ -302,14 +331,15 @@ flowchart LR
   plugin --> footer
 ```
 
-| Part                | Does                                                              |
-| ------------------- | ----------------------------------------------------------------- |
-| `tui.js`            | Keys, footer indicator, wiring                                    |
-| `lib/live.js`       | Types words into the prompt as they arrive; backs off if you edit |
-| `lib/clean.js`      | Coding terms, naming styles, spoken punctuation, "send it"        |
-| `lib/ptt.js`        | Tells tap from hold using key repeats                             |
-| `lib/helper.js`     | Starts the helper and reads its JSON events                       |
-| `helper/main.swift` | Microphone capture and speech recognition                         |
+| Part                | Does                                                                |
+| ------------------- | ------------------------------------------------------------------- |
+| `tui.js`            | Keys, commands, language picker and remembered settings             |
+| `lib/live.js`       | Types words into the prompt as they arrive; backs off if you edit   |
+| `lib/clean.js`      | Coding terms, naming styles, punctuation and "send it" per language |
+| `lib/ptt.js`        | Tells tap from hold using key repeats                               |
+| `lib/indicator.js`  | Footer: timer, level meter, language and next-step hint             |
+| `lib/helper.js`     | Runs the helper and reads its JSON events                           |
+| `helper/main.swift` | Microphone, both speech engines, stitching sentences across pauses  |
 
 What happens when you hold the key:
 
@@ -327,7 +357,7 @@ sequenceDiagram
   H->>M: microphone audio
   H-->>P: ready, level…
   loop while you speak
-    M-->>H: revised text
+    M-->>H: revised text (sentences kept across pauses)
     H-->>P: partial
     P->>P: clean up ("jason" → JSON)
     P->>B: replace only what changed
@@ -361,15 +391,19 @@ Point `cli.json` at your checkout to try it in OpenCode:
 Helper commands:
 
 ```bash
-bin/opencode-talk-helper check                         # permissions, active engine
-bin/opencode-talk-helper languages                     # your languages and on-device support
-bin/opencode-talk-helper mics                          # list microphones
-bin/opencode-talk-helper prepare --lang tr-TR          # install the macOS 26 model
-bin/opencode-talk-helper listen --engine dictation     # talk; type "stop" + Enter
-bin/opencode-talk-helper transcribe clip.aiff          # transcribe a file
+bin/opencode-talk-helper check                              # permissions, active engine
+bin/opencode-talk-helper languages [--all]                  # your languages / every supported one
+bin/opencode-talk-helper mics                               # list microphones
+bin/opencode-talk-helper prepare --lang de-DE --lang ja-JP  # install macOS 26 models
+bin/opencode-talk-helper listen --lang de-DE                # talk; type "stop" + Enter
+bin/opencode-talk-helper transcribe clip.aiff --engine legacy
 ```
 
-Set `OPENCODE_TALK_DEBUG=1` for diagnostics (helper: stderr; plugin:
+Common flags: `--lang`, `--engine auto|dictation|legacy`, `--mic <name>`,
+`--hint <word>`, and `--allow-cloud` (permit Apple's servers for languages
+without on-device support).
+
+Environment: set `OPENCODE_TALK_DEBUG=1` for diagnostics (helper: stderr; plugin:
 `~/Library/Logs/opencode-talk.log`), and
 `OPENCODE_TALK_TEST_FILE=clip.aiff` to stream a file through the live pipeline
 instead of the microphone (used by the tests).
