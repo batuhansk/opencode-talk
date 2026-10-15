@@ -1,13 +1,14 @@
 // opencode-talk-helper: streams on-device macOS speech recognition as JSON lines.
 //
 // Usage:
-//   opencode-talk-helper listen [--lang en-US] [--mic "MacBook"] [--hint JSON ...]
+//   opencode-talk-helper listen [--lang en-US] [--mic "MacBook"] [--engine auto|dictation|legacy] [--hint JSON ...]
+//   opencode-talk-helper prepare     (installs the macOS 26 dictation model if needed)
 //   opencode-talk-helper mics
-//   opencode-talk-helper transcribe <audio-file> [--hint ...]
+//   opencode-talk-helper transcribe <audio-file> [--engine ...] [--hint ...]
 //   opencode-talk-helper check
 //
 // Output (stdout, one JSON object per line):
-//   {"event":"ready","mic":"MacBook Pro Microphone","onDevice":"true"}
+//   {"event":"ready","mic":"MacBook Pro Microphone","engine":"dictation"}
 //   {"event":"level","value":"0.42"}       (input level 0...1, ~8/s)
 //   {"event":"partial","text":"..."}
 //   {"event":"final","text":"..."}
@@ -28,6 +29,14 @@ func emit(_ fields: [String: String]) {
   else { return }
   print(line)
   fflush(stdout)
+}
+
+/// Set OPENCODE_TALK_DEBUG=1 to log diagnostics to stderr.
+let debugEnabled = ProcessInfo.processInfo.environment["OPENCODE_TALK_DEBUG"] != nil
+
+func debug(_ message: @autoclosure () -> String) {
+  guard debugEnabled else { return }
+  FileHandle.standardError.write(Data("[opencode-talk] \(message())\n".utf8))
 }
 
 func fail(_ message: String) -> Never {
@@ -87,6 +96,7 @@ struct Options {
   var language = Locale.current.identifier.components(separatedBy: "@")[0]
   var hints: [String] = []
   var mic: String?
+  var engine = "auto"
   var positional: [String] = []
 
   init(_ arguments: [String]) {
@@ -105,6 +115,7 @@ struct Options {
       case "--lang": language = value
       case "--hint": hints.append(value)
       case "--mic": mic = value
+      case "--engine": engine = value
       default: break
       }
     }
@@ -136,22 +147,35 @@ func authorize() async {
   }
 }
 
-// MARK: - Live listening
+// MARK: - Engines
 
-/// Receives microphone audio on a capture queue and feeds the recognizer.
-/// `SFSpeechAudioBufferRecognitionRequest` is safe to append to from that
-/// queue, but isn't annotated as Sendable.
+/// The speech engine behind a listening session.
+///
+/// - `dictation`: macOS 26 `SpeechAnalyzer` + `DictationTranscriber`, Apple's
+///   newer on-device model built for dictation. Needs its language assets
+///   installed (done once by the system; see the `prepare` command).
+/// - `legacy`: `SFSpeechRecognizer`, available on macOS 14+.
+enum EngineKind: String {
+  case dictation, legacy
+}
+
+/// The current best text from either engine.
+struct Transcript {
+  var finalized = ""
+  var text: String { finalized.trimmingCharacters(in: .whitespaces) }
+}
+
+/// Receives microphone audio on a capture queue and hands it to the engine.
+/// Also reports the input level so the UI can show the mic hears something.
 final class AudioSink: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
-  let request: SFSpeechAudioBufferRecognitionRequest
+  private let feed: @Sendable (CMSampleBuffer) -> Void
   private var lastLevel = ContinuousClock.now
 
-  init(_ request: SFSpeechAudioBufferRecognitionRequest) { self.request = request }
+  init(feed: @escaping @Sendable (CMSampleBuffer) -> Void) { self.feed = feed }
 
   func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-    request.appendAudioSampleBuffer(sampleBuffer)
+    feed(sampleBuffer)
 
-    // Report the input level (0...1) about 8 times a second so the UI can
-    // show that the microphone actually hears something.
     let now = ContinuousClock.now
     guard now - lastLevel >= .milliseconds(120) else { return }
     lastLevel = now
@@ -161,30 +185,267 @@ final class AudioSink: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @
   }
 }
 
-@MainActor
-final class Listener {
-  private let recognizer: SFSpeechRecognizer
-  private let microphone: AVCaptureDevice
-  private let session = AVCaptureSession()
-  private let sink: AudioSink
-  private let queue = DispatchQueue(label: "opencode-talk.audio")
-  private var task: SFSpeechRecognitionTask?
-  private var lastText = ""
-  private var finished = false
-  private var stopping = false
+// MARK: - Legacy engine (SFSpeechRecognizer, macOS 14+)
 
-  init(recognizer: SFSpeechRecognizer, hints: [String], microphone: AVCaptureDevice) {
+/// `SFSpeechAudioBufferRecognitionRequest` is safe to append to from the
+/// capture queue, but isn't annotated as Sendable.
+final class LegacyEngine: @unchecked Sendable {
+  let request = SFSpeechAudioBufferRecognitionRequest()
+  private let recognizer: SFSpeechRecognizer
+  private var task: SFSpeechRecognitionTask?
+
+  init(recognizer: SFSpeechRecognizer, hints: [String]) {
     self.recognizer = recognizer
-    self.microphone = microphone
-    let request = SFSpeechAudioBufferRecognitionRequest()
     request.shouldReportPartialResults = true
     request.contextualStrings = hints
     request.addsPunctuation = true
     if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
-    sink = AudioSink(request)
   }
 
-  func start() {
+  func feed(_ buffer: CMSampleBuffer) { request.appendAudioSampleBuffer(buffer) }
+
+  @MainActor
+  func start(listener: Listener) {
+    task = recognizer.recognitionTask(with: request, resultHandler: Self.results(to: listener))
+  }
+
+  func finish() { request.endAudio() }
+  func cancel() { task?.cancel() }
+
+  // Callbacks arrive on a background thread. Build the handler in a
+  // nonisolated function so it doesn't inherit main-actor isolation (which
+  // Swift 6 enforces at runtime by trapping).
+  private static func results(to listener: Listener) -> @Sendable (SFSpeechRecognitionResult?, (any Error)?) -> Void {
+    { @Sendable result, error in
+      let text = result?.bestTranscription.formattedString
+      let isFinal = result?.isFinal ?? false
+      let failure = error.flatMap { ($0 as NSError).code == 1110 ? nil : $0.localizedDescription }
+      let ended = error != nil
+      Task { @MainActor in
+        if let text {
+          listener.update(Transcript(finalized: text), isFinal: isFinal)
+        } else if ended {
+          // "No speech detected" (1110) just ends with whatever we have.
+          listener.ended(error: failure)
+        }
+      }
+    }
+  }
+}
+
+// MARK: - Dictation engine (SpeechAnalyzer, macOS 26+)
+
+@available(macOS 26.0, *)
+enum DictationAssets {
+  static func supportedLocale(for language: String) async -> Locale? {
+    await DictationTranscriber.supportedLocale(equivalentTo: Locale(identifier: language))
+  }
+
+  static func isInstalled(_ locale: Locale) async -> Bool {
+    await DictationTranscriber.installedLocales.contains { $0.identifier(.bcp47) == locale.identifier(.bcp47) }
+  }
+
+  /// Asks the system to download the on-device model if needed. Returns
+  /// whether the model is ready afterwards.
+  static func install(_ locale: Locale) async -> Bool {
+    let module = DictationTranscriber(locale: locale, preset: .progressiveShortDictation)
+    do {
+      if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
+        try await request.downloadAndInstall()
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
+/// Stitches analyzer results into one transcript. Each result covers a time
+/// range and supersedes any earlier text from its start onward (volatile
+/// results get revised; `isFinal` alone isn't reliable for dictation).
+@available(macOS 26.0, *)
+struct SegmentedTranscript {
+  private var segments: [(start: CMTime, text: String)] = []
+
+  mutating func apply(_ result: DictationTranscriber.Result) {
+    let start = result.range.start
+    segments.removeAll { CMTimeCompare($0.start, start) >= 0 }
+    segments.append((start, String(result.text.characters)))
+  }
+
+  var text: String {
+    segments.map { $0.text.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+  }
+}
+
+/// Converts captured audio to the analyzer's format and streams it in.
+@available(macOS 26.0, *)
+final class DictationEngine: @unchecked Sendable {
+  private let locale: Locale
+  private let hints: [String]
+  private let transcriber: DictationTranscriber
+  private let analyzer: SpeechAnalyzer
+  private let input: AsyncStream<AnalyzerInput>
+  private let continuation: AsyncStream<AnalyzerInput>.Continuation
+  private var targetFormat: AVAudioFormat?
+  private var converter: AVAudioConverter?  // only touched on the capture queue
+  private var resultsTask: Task<Void, Never>?
+
+  init(locale: Locale, hints: [String]) {
+    self.locale = locale
+    self.hints = hints
+    transcriber = DictationTranscriber(locale: locale, preset: .progressiveShortDictation)
+    analyzer = SpeechAnalyzer(modules: [transcriber])
+    (input, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+  }
+
+  @MainActor
+  func start(listener: Listener) async throws {
+    targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+    debug("analyzer format: \(targetFormat.map { "\($0)" } ?? "none")")
+    if !hints.isEmpty {
+      let context = AnalysisContext()
+      context.contextualStrings[.general] = hints
+      try await analyzer.setContext(context)
+    }
+    try await analyzer.start(inputSequence: input)
+
+    let results = transcriber.results
+    resultsTask = Task { @MainActor in
+      var transcript = SegmentedTranscript()
+      do {
+        for try await result in results {
+          debug("result: \(String(result.text.characters))")
+          transcript.apply(result)
+          listener.update(Transcript(finalized: transcript.text), isFinal: false)
+        }
+        listener.ended(error: nil)
+      } catch {
+        listener.ended(error: error.localizedDescription)
+      }
+    }
+  }
+
+  func feed(_ sampleBuffer: CMSampleBuffer) {
+    guard let buffer = Self.pcmBuffer(from: sampleBuffer) else { return debug("could not read sample buffer") }
+    feed(buffer)
+  }
+
+  func feed(_ buffer: AVAudioPCMBuffer) {
+    guard let target = targetFormat else { return debug("no analyzer format yet") }
+    if buffer.format == target {
+      continuation.yield(AnalyzerInput(buffer: buffer))
+      return
+    }
+    if converter == nil || converter?.inputFormat != buffer.format {
+      converter = AVAudioConverter(from: buffer.format, to: target)
+      debug("converting \(buffer.format) -> \(target): \(converter == nil ? "failed" : "ok")")
+    }
+    guard let converter else { return }
+    let ratio = target.sampleRate / buffer.format.sampleRate
+    let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 1
+    guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
+    // The converter calls this block synchronously on this queue.
+    nonisolated(unsafe) let source = buffer
+    nonisolated(unsafe) var consumed = false
+    var error: NSError?
+    converter.convert(to: output, error: &error) { _, status in
+      if consumed {
+        status.pointee = .noDataNow
+        return nil
+      }
+      consumed = true
+      status.pointee = .haveData
+      return source
+    }
+    if let error { debug("convert error: \(error)") }
+    if error == nil, output.frameLength > 0 { continuation.yield(AnalyzerInput(buffer: output)) }
+  }
+
+  /// Ends the input; the results loop then delivers the last text and ends.
+  func finish() async {
+    continuation.finish()
+    try? await analyzer.finalizeAndFinishThroughEndOfInput()
+  }
+
+  func cancel() {
+    continuation.finish()
+    resultsTask?.cancel()
+  }
+
+  private static func pcmBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
+    guard let description = sampleBuffer.formatDescription,
+      var streamDescription = description.audioStreamBasicDescription,
+      let format = AVAudioFormat(streamDescription: &streamDescription)
+    else { return nil }
+    let frames = AVAudioFrameCount(sampleBuffer.numSamples)
+    guard frames > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return nil }
+    buffer.frameLength = frames
+    let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
+      sampleBuffer, at: 0, frameCount: Int32(frames), into: buffer.mutableAudioBufferList)
+    return status == noErr ? buffer : nil
+  }
+}
+
+// MARK: - Live listening
+
+@MainActor
+final class Listener {
+  private enum Engine {
+    case legacy(LegacyEngine)
+    case dictation(any Sendable)  // DictationEngine on macOS 26+
+  }
+
+  private let microphone: AVCaptureDevice
+  /// Test-only: stream this audio file in real time instead of the mic.
+  var testFile: String?
+  private let session = AVCaptureSession()
+  private let queue = DispatchQueue(label: "opencode-talk.audio")
+  private let engine: Engine
+  private var sink: AudioSink?
+  private var lastText = ""
+  private var finished = false
+  private var stopping = false
+
+  init(legacy: LegacyEngine, microphone: AVCaptureDevice) {
+    self.microphone = microphone
+    engine = .legacy(legacy)
+  }
+
+  @available(macOS 26.0, *)
+  init(dictation: DictationEngine, microphone: AVCaptureDevice) {
+    self.microphone = microphone
+    engine = .dictation(dictation)
+  }
+
+  var engineName: EngineKind {
+    if case .dictation = engine { return .dictation }
+    return .legacy
+  }
+
+  func start() async {
+    let feed: @Sendable (CMSampleBuffer) -> Void
+    switch engine {
+    case .legacy(let legacy):
+      legacy.start(listener: self)
+      feed = { legacy.feed($0) }
+    case .dictation(let boxed):
+      guard #available(macOS 26.0, *), let dictation = boxed as? DictationEngine else { fail("Engine unavailable") }
+      do {
+        try await dictation.start(listener: self)
+      } catch {
+        fail("Could not start dictation: \(error.localizedDescription)")
+      }
+      feed = { dictation.feed($0) }
+    }
+
+    if let testFile {
+      streamTestFile(testFile, feed: feed)
+      return
+    }
+
+    let sink = AudioSink(feed: feed)
+    self.sink = sink
     do {
       let input = try AVCaptureDeviceInput(device: microphone)
       let output = AVCaptureAudioDataOutput()
@@ -199,61 +460,85 @@ final class Listener {
     } catch {
       fail("Could not open microphone \(microphone.localizedName): \(error.localizedDescription)")
     }
-
-    task = recognizer.recognitionTask(with: sink.request, resultHandler: Self.results(to: self))
     session.startRunning()
     guard session.isRunning else { fail("Could not start microphone \(microphone.localizedName)") }
-    emit([
-      "event": "ready",
-      "mic": microphone.localizedName,
-      "onDevice": String(sink.request.requiresOnDeviceRecognition),
-    ])
+    emit(["event": "ready", "mic": microphone.localizedName, "engine": engineName.rawValue])
   }
 
-  // Recognition callbacks arrive on a background thread. Build the handler in
-  // a nonisolated function so it doesn't inherit main-actor isolation (which
-  // Swift 6 enforces at runtime by trapping).
-  private nonisolated static func results(
-    to listener: Listener
-  ) -> @Sendable (SFSpeechRecognitionResult?, (any Error)?) -> Void {
-    { @Sendable result, error in
-      let text = result?.bestTranscription.formattedString
-      let isFinal = result?.isFinal ?? false
-      let failure = error.flatMap { ($0 as NSError).code == 1110 ? nil : $0.localizedDescription }
-      let ended = error != nil
-      Task { @MainActor in listener.handle(text: text, isFinal: isFinal, error: failure, ended: ended) }
+  /// Plays an audio file through the same pipeline as the microphone, in real
+  /// time, then stops. Used by the integration tests.
+  private func streamTestFile(_ path: String, feed: @escaping @Sendable (CMSampleBuffer) -> Void) {
+    guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path)) else { fail("Cannot read \(path)") }
+    emit(["event": "ready", "mic": "file", "engine": engineName.rawValue])
+    let pcmFeed: (@Sendable (AVAudioPCMBuffer) -> Void)?
+    switch engine {
+    case .legacy(let legacy): pcmFeed = { legacy.request.append($0) }
+    case .dictation(let boxed):
+      if #available(macOS 26.0, *), let dictation = boxed as? DictationEngine { pcmFeed = { dictation.feed($0) } } else { pcmFeed = nil }
+    }
+    _ = feed
+    let format = file.processingFormat
+    let chunk = AVAudioFrameCount(format.sampleRate / 10)  // 100 ms
+    let source = file
+    Task.detached {
+      while let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunk),
+        (try? source.read(into: buffer, frameCount: chunk)) != nil, buffer.frameLength > 0
+      {
+        pcmFeed?(buffer)
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      try? await Task.sleep(for: .milliseconds(500))
+      await MainActor.run { self.stop() }
     }
   }
 
-  /// Stops recording, then waits briefly for the recognizer's final result.
+  /// Stops recording and lets the engine deliver its final text.
   func stop() {
     guard !stopping else { return }
     stopping = true
     session.stopRunning()
-    sink.request.endAudio()
-    Task { @MainActor in
-      try? await Task.sleep(for: .milliseconds(1500))
-      self.finish()
+    switch engine {
+    case .legacy(let legacy):
+      legacy.finish()
+      // The legacy recognizer may not report "final" promptly; cap the wait.
+      Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(1500))
+        self.finish()
+      }
+    case .dictation(let boxed):
+      guard #available(macOS 26.0, *), let dictation = boxed as? DictationEngine else { return finish() }
+      Task { @MainActor in
+        await dictation.finish()
+        try? await Task.sleep(for: .milliseconds(300))
+        self.finish()
+      }
     }
   }
 
-  private func handle(text: String?, isFinal: Bool, error: String?, ended: Bool) {
-    if let text {
+  func update(_ transcript: Transcript, isFinal: Bool) {
+    guard !finished else { return }
+    let text = transcript.text
+    if !text.isEmpty, text != lastText {
       lastText = text
-      if isFinal { return finish() }
       emit(["event": "partial", "text": text])
-    } else if ended {
-      // "No speech detected" (1110) ends with whatever we have; other errors
-      // while still recording are real failures.
-      if let error, !stopping { fail(error) }
-      finish()
     }
+    if isFinal { finish() }
+  }
+
+  func ended(error: String?) {
+    // Errors while still recording are real failures; after stop they're noise.
+    if let error, !stopping { fail(error) }
+    finish()
   }
 
   private func finish() {
     guard !finished else { return }
     finished = true
-    task?.cancel()
+    switch engine {
+    case .legacy(let legacy): legacy.cancel()
+    case .dictation(let boxed):
+      if #available(macOS 26.0, *), let dictation = boxed as? DictationEngine { dictation.cancel() }
+    }
     emit(["event": "final", "text": lastText])
     exit(0)
   }
@@ -294,14 +579,31 @@ func watchStdin(onStop: @escaping @Sendable () -> Void) {
   }.start()
 }
 
+// MARK: - Engine selection
+
+/// Picks the engine: `dictation` when on macOS 26 with the model installed
+/// (or explicitly requested), otherwise `legacy`.
+func chooseEngine(_ requested: String) async -> (EngineKind, Locale?) {
+  if requested == "legacy" { return (.legacy, nil) }
+  if #available(macOS 26.0, *), let locale = await DictationAssets.supportedLocale(for: options.language) {
+    if await DictationAssets.isInstalled(locale) { return (.dictation, locale) }
+    if requested == "dictation" {
+      guard await DictationAssets.install(locale) else { fail("Could not install the dictation model for \(locale.identifier)") }
+      return (.dictation, locale)
+    }
+  } else if requested == "dictation" {
+    fail("The dictation engine needs macOS 26 and a supported language")
+  }
+  return (.legacy, nil)
+}
+
 // MARK: - Commands
 
-func transcribe(file path: String, recognizer: SFSpeechRecognizer, hints: [String]) async -> Never {
+func transcribeLegacy(file path: String, recognizer: SFSpeechRecognizer, hints: [String]) async -> Never {
   let request = SFSpeechURLRecognitionRequest(url: URL(fileURLWithPath: path))
   request.contextualStrings = hints
   request.addsPunctuation = true
   if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
-
   recognizer.recognitionTask(with: request, resultHandler: fileResults())
   await runForever()
 }
@@ -309,11 +611,30 @@ func transcribe(file path: String, recognizer: SFSpeechRecognizer, hints: [Strin
 private func fileResults() -> @Sendable (SFSpeechRecognitionResult?, (any Error)?) -> Void {
   { @Sendable result, error in
     if let result, result.isFinal {
-      emit(["event": "final", "text": result.bestTranscription.formattedString])
+      emit(["event": "final", "text": result.bestTranscription.formattedString, "engine": "legacy"])
       exit(0)
     } else if let error {
       fail(error.localizedDescription)
     }
+  }
+}
+
+@available(macOS 26.0, *)
+func transcribeDictation(file path: String, locale: Locale, hints: [String]) async -> Never {
+  do {
+    let transcriber = DictationTranscriber(locale: locale, preset: .shortDictation)
+    let context = AnalysisContext()
+    context.contextualStrings[.general] = hints
+    let file = try AVAudioFile(forReading: URL(fileURLWithPath: path))
+    let analyzer = try await SpeechAnalyzer(
+      inputAudioFile: file, modules: [transcriber], analysisContext: context, finishAfterFile: true)
+    var transcript = SegmentedTranscript()
+    for try await result in transcriber.results { transcript.apply(result) }
+    withExtendedLifetime(analyzer) {}  // keep the analyzer alive while reading results
+    emit(["event": "final", "text": transcript.text, "engine": "dictation"])
+    exit(0)
+  } catch {
+    fail(error.localizedDescription)
   }
 }
 
@@ -334,11 +655,23 @@ guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: options.lan
 switch options.command {
 case "check":
   await authorize()
+  let (engine, _) = await chooseEngine("auto")
   emit([
     "event": "ok",
     "lang": options.language,
+    "engine": engine.rawValue,
     "onDevice": String(recognizer.supportsOnDeviceRecognition),
   ])
+  exit(0)
+
+case "prepare":
+  // Installs the macOS 26 dictation model if needed (a one-time, system-managed download).
+  guard #available(macOS 26.0, *), let locale = await DictationAssets.supportedLocale(for: options.language) else {
+    emit(["event": "ok", "engine": "legacy"])
+    exit(0)
+  }
+  let ready = await DictationAssets.isInstalled(locale) ? true : await DictationAssets.install(locale)
+  emit(["event": "ok", "engine": ready ? "dictation" : "legacy", "lang": locale.identifier])
   exit(0)
 
 case "mics":
@@ -351,11 +684,14 @@ case "mics":
 case "transcribe":
   guard let path = options.positional.first else { fail("Usage: transcribe <audio-file>") }
   await authorize()
-  await transcribe(file: path, recognizer: recognizer, hints: options.hints)
+  let (engine, locale) = await chooseEngine(options.engine)
+  if engine == .dictation, #available(macOS 26.0, *), let locale {
+    await transcribeDictation(file: path, locale: locale, hints: options.hints)
+  }
+  await transcribeLegacy(file: path, recognizer: recognizer, hints: options.hints)
 
 case "listen":
   await authorize()
-  guard recognizer.isAvailable else { fail("Speech recognizer is not available right now") }
   installAbortSignals()
   let microphone: AVCaptureDevice
   if let query = options.mic {
@@ -369,8 +705,17 @@ case "listen":
     }
     microphone = found
   }
-  let listener = Listener(recognizer: recognizer, hints: options.hints, microphone: microphone)
-  listener.start()
+
+  let (engine, locale) = await chooseEngine(options.engine)
+  let listener: Listener
+  if engine == .dictation, #available(macOS 26.0, *), let locale {
+    listener = Listener(dictation: DictationEngine(locale: locale, hints: options.hints), microphone: microphone)
+  } else {
+    guard recognizer.isAvailable else { fail("Speech recognizer is not available right now") }
+    listener = Listener(legacy: LegacyEngine(recognizer: recognizer, hints: options.hints), microphone: microphone)
+  }
+  listener.testFile = ProcessInfo.processInfo.environment["OPENCODE_TALK_TEST_FILE"]
+  await listener.start()
   startWatchdog { listener.stop() }
   watchStdin { Task { @MainActor in listener.stop() } }
   await runForever()

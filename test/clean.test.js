@@ -14,6 +14,12 @@ test("case conversion stops at connector words", () => {
   assert.equal(clean("use pascal case user service for the class"), "Use UserService for the class")
 })
 
+test("identifiers at the start of a sentence keep their case", () => {
+  assert.equal(clean("snake case max retry count"), "max_retry_count")
+  assert.equal(clean("camel case get user is broken"), "getUserIsBroken")
+  assert.equal(clean("camel case get user is broken comma fix it"), "getUserIsBroken, fix it")
+})
+
 test("spoken punctuation and fillers", () => {
   assert.equal(clean("um fix the bug comma then run tests period"), "Fix the bug, then run tests.")
   assert.equal(clean("call backtick foo bar backtick"), "Call `foo bar`")

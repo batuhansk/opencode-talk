@@ -4,10 +4,12 @@
 
 First release, for OpenCode 2 on macOS 14+.
 
-- Talk instead of type: `ctrl+y` (hold or tap), `ctrl+x v`, or `/talk`
-- On-device speech recognition built into macOS: no downloads, no API keys
-- Local cleanup rules for coding terms, naming styles, spoken punctuation and fillers
+- Talk instead of type: hold or tap `ctrl+y`, or use `ctrl+x v` / `/talk`
+- Words appear in the prompt box as you speak, at your cursor; your own edits are never overwritten
+- Two on-device speech engines: Apple's newer dictation model on macOS 26 (`SpeechAnalyzer`), `SFSpeechRecognizer` on macOS 14+
+- No downloads, no API keys; the macOS 26 model is installed by macOS in the background
+- Local cleanup for coding terms, naming styles (camel, snake, pascal, kebab, constant), spoken punctuation and fillers
 - Say "send it" to submit, or enable `autoSend`
-- Live footer indicator with microphone level and transcript
-- Warning when the microphone picks up no sound; `mic` option to choose one
-- Native Swift 6 helper with reliable shutdown (never leaves the microphone on)
+- Footer with timer and microphone level meter; warning when the mic picks up no sound
+- `mic`, `engine`, `liveText`, `lang`, `vocab`, `hints`, `keybind`, `silenceStop` options
+- Native Swift 6 helper that never leaves the microphone on

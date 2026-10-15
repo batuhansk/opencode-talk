@@ -12,6 +12,8 @@
 //       "mic": "MacBook",                 // microphone name fragment; default: system input
 //       "autoSend": false,                // submit after inserting
 //       "silenceStop": 2,                 // seconds of silence before auto-stop in tap mode; 0 disables
+//       "liveText": true,                 // show words in the prompt while talking
+//       "engine": "auto",                 // auto | dictation (macOS 26) | legacy
 //       "lang": "en-US",                  // default: system language
 //       "vocab": { "acme db": "AcmeDB" }  // extra spoken -> written terms
 //   } }
@@ -19,8 +21,9 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { spawn } from "node:child_process"
 import { buildVocab, clean, extractSend } from "./lib/clean.js"
-import { startListening } from "./lib/helper.js"
+import { prepareEngine, startListening } from "./lib/helper.js"
 import { createIndicator } from "./lib/indicator.js"
+import { createLivePreview } from "./lib/live.js"
 import { createPushToTalk } from "./lib/ptt.js"
 
 const NO_SPEECH_TIMEOUT = 8000
@@ -50,6 +53,12 @@ export default Plugin.define({
     let audioTimer = null
     let heardSomething = false
     let loudest = 0
+    const live = createLivePreview()
+    const liveText = options.liveText !== false
+
+    // On macOS 26, install Apple's newer dictation model in the background so
+    // the first talk uses it. No-op elsewhere or when already installed.
+    prepareEngine({ lang: options.lang }).catch(() => {})
 
     const toast = (message, variant = "info", duration = 2500) =>
       context.ui.toast.show({ title: "Talk", message, variant, duration })
@@ -95,12 +104,14 @@ export default Plugin.define({
 
     function begin() {
       target = focusedInput()
+      if (liveText) live.begin(target)
       heardSomething = false
       status.show({ phase: "listening", since: Date.now(), text: "", holding: false })
       loudest = 0
       session = startListening({
         lang: options.lang,
         mic: options.mic,
+        engine: options.engine,
         hints,
         onReady: ({ mic } = {}) => {
           resetSilence()
@@ -122,16 +133,31 @@ export default Plugin.define({
         },
         onPartial: (text) => {
           heardSomething = true
-          status.show({ text, holding: ptt.holding })
+          // Words go straight into the prompt; the footer keeps the clock and
+          // meter. If the prompt isn't available, the footer shows the words.
+          const inPrompt = live.active && live.update(clean(text, vocab))
+          status.show({ text: inPrompt ? "" : text, holding: ptt.holding })
           resetSilence()
         },
         onFinal: async (raw) => {
           end()
           const { text, send } = extractSend(clean(raw, vocab))
-          if (!text) return toast("Didn't catch anything", "warning", 1500)
-          await deliver(text + " ", send || options.autoSend === true)
+          const submit = send || options.autoSend === true
+          if (!text) {
+            live.clear()
+            return toast("Didn't catch anything", "warning", 1500)
+          }
+          const committed = live.commit(text + " ")
+          if (committed === true) {
+            if (submit) context.keymap.dispatch("prompt.submit")
+          } else if (committed === "kept") {
+            toast("You edited the prompt while talking, so your edits were kept as-is", "info", 4000)
+          } else {
+            await deliver(text + " ", submit)
+          }
         },
         onError: (err) => {
+          live.clear()
           end()
           toast(err.message, "error", 6000)
         },
@@ -156,6 +182,7 @@ export default Plugin.define({
     }
 
     function cancel() {
+      live.clear()
       session?.cancel()
       end()
     }
