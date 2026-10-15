@@ -31,17 +31,21 @@ Restart OpenCode. The first time you talk, macOS asks for **Microphone** and
 
 ## Use
 
-| Action              | Key          | Command        |
-| ------------------- | ------------ | -------------- |
-| Start / stop talking | `ctrl+x v`  | `/talk`        |
-| Stop and send        | `ctrl+x j`  | `/talk-send`   |
-| Cancel               |             | `/talk-cancel` |
+One key does everything: **`ctrl+g`** (or `/talk`).
 
-While you talk, the live transcript shows in a toast. When you stop, the
-cleaned text is inserted into the prompt box so you can edit it before sending.
-If the prompt box isn't focused, the text is copied to the clipboard instead.
+| Do this                | What happens                                          |
+| ---------------------- | ----------------------------------------------------- |
+| **Hold** `ctrl+g`      | Talk while holding, release to insert                 |
+| **Tap** `ctrl+g`       | Start listening; tap again or pause ~2 s to insert    |
+| `esc`                  | Cancel while listening                                |
+| Say **"send it"**      | Insert and submit in one go                           |
 
-**Say "send it"** at the end to submit right away.
+While you talk, a live `● 0:03 …your words…` line shows in the prompt footer.
+The cleaned text is inserted at your cursor so you can review it before
+pressing Enter. If the prompt box isn't focused, the text goes to the clipboard.
+
+> Hold-to-talk works in any terminal: it detects the key-repeat stream your
+> terminal sends while a key is held, so it doesn't need key-release events.
 
 ### What gets cleaned up
 
@@ -60,8 +64,9 @@ These terms are also sent to Apple's recognizer as hints, which improves accurac
     {
       "package": "opencode-talk",
       "options": {
-        "keybind": "<leader>v",
-        "sendKeybind": "<leader>j",
+        "keybind": "ctrl+g",
+        "autoSend": false,
+        "silenceStop": 2,
         "lang": "en-US",
         "vocab": { "acme db": "AcmeDB", "super base": "Supabase" }
       }
@@ -70,8 +75,9 @@ These terms are also sent to Apple's recognizer as hints, which improves accurac
 }
 ```
 
-- `keybind`: start/stop talking (default `<leader>v`)
-- `sendKeybind`: stop and submit (default `<leader>j`)
+- `keybind`: talk key (default `ctrl+g`). Use a single chord so holding works.
+- `autoSend`: submit right after inserting (default `false`)
+- `silenceStop`: seconds of silence before auto-stopping in tap mode; `0` disables (default `2`)
 - `lang`: recognition language, e.g. `en-US`, `de-DE` (default: your system language)
 - `vocab`: extra spoken → written replacements, also used as recognition hints
 - `hints`: extra words to bias recognition without replacing anything

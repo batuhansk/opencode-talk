@@ -1,12 +1,16 @@
 // opencode-talk: talk instead of type in OpenCode (v2 CLI plugin).
 //
-// Press the talk key, speak, press it again: your words are cleaned up and
-// inserted into the prompt. End with "send it" to submit right away.
+// One key does everything:
+//   tap  ctrl+g  start; tap again (or pause) to insert
+//   hold ctrl+g  talk while holding; release to insert
+//   esc          cancel while listening
+// End with "send it" to submit, or set autoSend.
 //
 // Options (cli.json):
 //   { "package": "opencode-talk", "options": {
-//       "keybind": "<leader>v",           // start/stop talking
-//       "sendKeybind": "<leader>j",       // stop and submit
+//       "keybind": "ctrl+g",              // talk key (single chord, so holding works)
+//       "autoSend": false,                // submit after inserting
+//       "silenceStop": 2,                 // seconds of silence before auto-stop in tap mode; 0 disables
 //       "lang": "en-US",                  // default: system language
 //       "vocab": { "acme db": "AcmeDB" }  // extra spoken -> written terms
 //   } }
@@ -15,6 +19,10 @@ import { Plugin } from "@opencode/plugin/tui"
 import { spawn } from "node:child_process"
 import { buildVocab, clean, extractSend } from "./lib/clean.js"
 import { startListening } from "./lib/helper.js"
+import { createIndicator } from "./lib/indicator.js"
+import { createPushToTalk } from "./lib/ptt.js"
+
+const NO_SPEECH_TIMEOUT = 8000
 
 function copyToClipboard(text) {
   return new Promise((resolve) => {
@@ -27,22 +35,44 @@ function copyToClipboard(text) {
 
 export default Plugin.define({
   id: "opencode-talk",
-  setup(context) {
+  async setup(context) {
     const options = context.options ?? {}
     const vocab = buildVocab(options.vocab)
     const hints = [...vocab.hints, ...(options.hints ?? [])].slice(0, 100)
+    const silenceMs = (options.silenceStop ?? 2) * 1000
+
     let session = null
     let target = null
-    let submitOnStop = false
+    let silenceTimer = null
+    let heardSomething = false
 
     const toast = (message, variant = "info", duration = 2500) =>
       context.ui.toast.show({ title: "Talk", message, variant, duration })
 
-    // The prompt box is an OpenTUI textarea; remember it when talking starts
-    // so toasts or dialogs that grab focus don't redirect the text.
+    const indicator = await createIndicator(context).catch(() => null)
+    const status = {
+      show(s) {
+        if (indicator) return indicator.show(s)
+        if (s.phase === "listening" && !s.text) toast("🎙 Listening… tap again or press esc", "info", 60000)
+        else if (s.text) toast(`🎙 ${s.text}`, "info", 60000)
+      },
+      hide: () => indicator?.hide(),
+    }
+
+    // The prompt box is an OpenTUI textarea. Remember it when talking starts
+    // so dialogs or toasts that grab focus don't redirect the text.
     const focusedInput = () => {
       const r = context.renderer.currentFocusedRenderable
       return r && typeof r.insertText === "function" ? r : null
+    }
+
+    const resetSilence = () => {
+      if (silenceTimer) clearTimeout(silenceTimer)
+      silenceTimer = null
+      if (!session) return
+      const wait = heardSomething ? silenceMs : NO_SPEECH_TIMEOUT
+      if (!wait || ptt.holding) return
+      silenceTimer = setTimeout(() => !ptt.holding && finish(), wait)
     }
 
     async function deliver(text, submit) {
@@ -51,87 +81,93 @@ export default Plugin.define({
         input.focus?.()
         input.insertText(text)
         if (submit) context.keymap.dispatch("prompt.submit")
-        toast(submit ? "Sent" : "Added to prompt", "success", 1200)
         return
       }
       const copied = await copyToClipboard(text)
-      toast(copied ? "Prompt box not focused — copied, press ⌘V" : text, copied ? "warning" : "info", 5000)
+      toast(copied ? "Prompt box wasn't focused — copied, press ⌘V" : text, copied ? "warning" : "info", 5000)
     }
 
-    function start() {
-      submitOnStop = false
+    function begin() {
       target = focusedInput()
-      let lastShown = 0
+      heardSomething = false
+      status.show({ phase: "listening", since: Date.now(), text: "", holding: false })
       session = startListening({
         lang: options.lang,
         hints,
-        onReady: () => toast("🎙 Listening… press again to stop", "info", 60000),
+        onReady: resetSilence,
         onPartial: (text) => {
-          const now = Date.now()
-          if (now - lastShown < 250) return
-          lastShown = now
-          toast(`🎙 ${text}`, "info", 60000)
+          heardSomething = true
+          status.show({ text, holding: ptt.holding })
+          resetSilence()
         },
         onFinal: async (raw) => {
-          session = null
+          end()
           const { text, send } = extractSend(clean(raw, vocab))
-          if (!text) return toast("Didn't catch anything", "warning")
-          await deliver(text + " ", send || submitOnStop)
+          if (!text) return toast("Didn't catch anything", "warning", 1500)
+          await deliver(text + " ", send || options.autoSend === true)
         },
         onError: (err) => {
-          session = null
+          end()
           toast(err.message, "error", 6000)
         },
       })
     }
 
-    function stop(submit) {
-      submitOnStop = submit
-      session?.stop()
-      toast("Finishing…", "info", 3000)
+    function finish() {
+      if (!session) return
+      if (silenceTimer) clearTimeout(silenceTimer)
+      silenceTimer = null
+      status.show({ phase: "finishing", holding: false })
+      session.stop()
     }
+
+    function end() {
+      session = null
+      if (silenceTimer) clearTimeout(silenceTimer)
+      silenceTimer = null
+      ptt.reset()
+      status.hide()
+    }
+
+    function cancel() {
+      session?.cancel()
+      end()
+    }
+
+    const ptt = createPushToTalk({ start: begin, stop: finish, isActive: () => session !== null })
 
     context.keymap.layer(() => ({
       mode: "global",
+      priority: 100,
       commands: [
         {
           id: "talk.toggle",
-          title: "Talk: start/stop",
-          description: "Speak a prompt; press again to insert it",
+          title: "Talk",
+          description: "Tap to start/stop, or hold while speaking",
           group: "Voice",
-          bind: options.keybind ?? "<leader>v",
+          bind: options.keybind ?? "ctrl+g",
           palette: true,
           suggested: true,
           slash: { name: "talk" },
-          run: () => (session ? stop(false) : start()),
+          run: (_input, event) => {
+            ptt.press(event?.repeated === true)
+            if (ptt.holding) status.show({ holding: true })
+          },
         },
         {
-          id: "talk.send",
-          title: "Talk: stop and send",
-          description: "Stop talking and submit the prompt",
-          group: "Voice",
-          bind: options.sendKeybind ?? "<leader>j",
-          palette: true,
-          slash: { name: "talk-send" },
-          run: () => (session ? stop(true) : toast("Not listening", "warning")),
-        },
-        {
-          id: "talk.cancel",
-          title: "Talk: cancel",
-          description: "Stop listening and discard",
-          group: "Voice",
-          palette: true,
-          slash: { name: "talk-cancel" },
+          bind: "escape",
           run: () => {
-            session?.cancel()
-            session = null
-            toast("Cancelled", "info", 1200)
+            if (!session) return false
+            cancel()
           },
         },
       ],
-      bindings: ["talk.toggle", "talk.send", "talk.cancel"],
+      bindings: ["talk.toggle"],
     }))
 
-    return () => session?.cancel()
+    return () => {
+      cancel()
+      indicator?.dispose()
+    }
   },
 })
