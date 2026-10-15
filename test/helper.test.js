@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { prepareEngine, startListening } from "../lib/helper.js"
+import { listLanguages, prepareEngine, startListening } from "../lib/helper.js"
 
 const HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "opencode-talk-helper")
 function skipReason() {
@@ -121,6 +121,7 @@ for (const engine of ["legacy", "dictation"]) {
         execFileSync("say", ["-v", "Samantha", "-o", clip, "run the tests then fix anything that fails"])
         const { ready, partials, text } = await listenToClip(clip, engine)
         assert.equal(ready.engine, engine)
+        assert.ok(ready.lang)
         assert.ok(partials.length >= 3, `expected several partials, got ${partials.length}`)
         assert.match(text, /run the tests?/i)
         assert.match(text, /fails/i)
@@ -131,11 +132,53 @@ for (const engine of ["legacy", "dictation"]) {
   )
 }
 
-test("prepare reports the engine that will be used", { skip }, async () => {
-  const engine = await prepareEngine()
-  assert.ok(["dictation", "legacy"].includes(engine))
-  assert.equal(engine === "dictation", hasDictation)
+test("prepare reports the engine for each language", { skip }, async () => {
+  const events = await prepareEngine(["en-US"])
+  assert.equal(events.length, 1)
+  assert.equal(events[0].lang, "en-US")
+  assert.equal(events[0].engine === "dictation", hasDictation)
 })
+
+test("lists languages with support and on-device status", { skip }, async () => {
+  const [en, unknown] = await listLanguages(["en-US", "xx-YY"])
+  assert.deepEqual(
+    { lang: en.lang, name: en.name, supported: en.supported, onDevice: en.onDevice },
+    { lang: "en-US", name: "English (United States)", supported: true, onDevice: true },
+  )
+  assert.equal(unknown.supported, false)
+  // Without arguments: the preferred languages from System Settings.
+  assert.ok((await listLanguages()).length >= 1)
+})
+
+test("rejects listening in an unsupported language", { skip }, () => {
+  const { code, out } = run("listen", "--lang", "xx-YY")
+  assert.equal(code, 1)
+  assert.match(out[0].message, /isn't supported/)
+})
+
+test(
+  "recognizes Turkish when Turkish is the active language",
+  { skip: skip || (!hasDictation && "needs macOS 26 dictation model"), timeout: 300000 },
+  async () => {
+    const voices = execFileSync("say", ["-v", "?"], { encoding: "utf8" })
+    const voice = voices
+      .split("\n")
+      .find((l) => /\btr_TR\b/.test(l))
+      ?.split(/\s{2,}/)[0]
+    if (!voice) return // no Turkish system voice installed to synthesize the clip
+    const dir = mkdtempSync(path.join(tmpdir(), "opencode-talk-"))
+    try {
+      const clip = path.join(dir, "tr.aiff")
+      execFileSync("say", ["-v", voice, "-o", clip, "testleri çalıştır ve hataları düzelt"])
+      const tr = run("transcribe", clip, "--lang", "tr-TR").out[0]
+      assert.match(tr.text, /testleri çalıştır/i)
+      const en = run("transcribe", clip, "--lang", "en-US").out[0]
+      assert.doesNotMatch(en.text, /testleri çalıştır/i)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  },
+)
 
 test("stop returns a final result and leaves no processes", { skip }, async () => {
   const events = []

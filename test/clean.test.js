@@ -30,6 +30,26 @@ test("custom vocabulary", () => {
   assert.equal(clean("migrate acme db", v), "Migrate AcmeDB")
 })
 
+test("Turkish: spoken punctuation, tech terms, and send", () => {
+  assert.equal(
+    clean("testleri çalıştır virgül sonra jason dosyasını düzelt nokta", undefined, "tr-TR"),
+    "Testleri çalıştır, sonra JSON dosyasını düzelt.",
+  )
+  assert.equal(clean("bu doğru mu soru işareti", undefined, "tr"), "Bu doğru mu?")
+  // English punctuation words are left alone in Turkish, and vice versa.
+  assert.equal(clean("virgül nokta", undefined, "en-US"), "Virgül nokta")
+  assert.equal(clean("noktalı virgülsüz", undefined, "tr-TR"), "Noktalı virgülsüz")
+  assert.deepEqual(extractSend("Testleri çalıştır gönder", "tr-TR"), { text: "Testleri çalıştır", send: true })
+  assert.deepEqual(extractSend("Testleri çalıştır send it", "tr-TR"), {
+    text: "Testleri çalıştır send it",
+    send: false,
+  })
+})
+
+test("languages without rules only get vocabulary fixes", () => {
+  assert.equal(clean("öffne die jason datei comma bitte", undefined, "de-DE"), "Öffne die JSON datei comma bitte")
+})
+
 test("send command", () => {
   assert.deepEqual(extractSend("Fix the tests, send it."), { text: "Fix the tests", send: true })
   assert.deepEqual(extractSend("Fix the tests"), { text: "Fix the tests", send: false })

@@ -14,14 +14,15 @@
 //       "silenceStop": 2,                 // seconds of silence before auto-stop in tap mode; 0 disables
 //       "liveText": true,                 // show words in the prompt while talking
 //       "engine": "auto",                 // auto | dictation (macOS 26) | legacy
-//       "lang": "en-US",                  // default: system language
+//       "languages": ["en-US", "tr-TR"],  // switch with /talk:language; default: System Settings
+//       "onDeviceOnly": true,             // never send audio to Apple's servers
 //       "vocab": { "acme db": "AcmeDB" }  // extra spoken -> written terms
 //   } }
 
 import { Plugin } from "@opencode/plugin/tui"
 import { spawn } from "node:child_process"
 import { buildVocab, clean, extractSend } from "./lib/clean.js"
-import { prepareEngine, startListening } from "./lib/helper.js"
+import { listLanguages, prepareEngine, startListening } from "./lib/helper.js"
 import { createIndicator } from "./lib/indicator.js"
 import { createLivePreview } from "./lib/live.js"
 import { createPushToTalk } from "./lib/ptt.js"
@@ -55,10 +56,91 @@ export default Plugin.define({
     let loudest = 0
     const live = createLivePreview()
     const liveText = options.liveText !== false
+    const allowCloud = options.onDeviceOnly === false
 
-    // On macOS 26, install Apple's newer dictation model in the background so
-    // the first talk uses it. No-op elsewhere or when already installed.
-    prepareEngine({ lang: options.lang }).catch(() => {})
+    // Languages: from options, else the preferred languages in System
+    // Settings that Apple can recognize. The active one is remembered.
+    // Languages added from "More languages…" are remembered too.
+    const [settings, updateSettings] = context.storage.store("settings", {
+      initial: { language: null, added: [] },
+    })
+    const configured = options.languages ?? (options.lang ? [options.lang] : [])
+    const base = (await listLanguages(configured).catch(() => [])).filter((l) => l.supported)
+    const added = (settings.added ?? []).length
+      ? (await listLanguages(settings.added).catch(() => [])).filter((l) => l.supported)
+      : []
+    let languages = [...base, ...added.filter((a) => !base.some((b) => b.lang === a.lang))]
+    if (languages.length === 0) languages = [{ lang: configured[0], name: configured[0] ?? "System language" }]
+    let allLanguages = null // loaded on demand; listing every language takes a few seconds
+    const activeLanguage = () => languages.find((l) => l.lang === settings.language) ?? languages[0]
+    const shortCode = (lang) => (lang ?? "").split(/[-_]/)[0].toUpperCase()
+
+    // On macOS 26, install Apple's dictation models in the background so the
+    // first talk in each language is fast and on-device.
+    prepareEngine(languages.map((l) => l.lang).filter(Boolean)).catch(() => {})
+
+    const MORE = "\u0000more"
+    const describeLanguage = (l) =>
+      l.onDevice ? "On-device" : allowCloud ? "Uses Apple's servers" : "Not available on-device"
+    const languageOption = (l) => ({
+      title: l.name,
+      value: l.lang,
+      description: describeLanguage(l),
+      disabled: !l.onDevice && !allowCloud,
+    })
+
+    async function chooseLanguage(lang) {
+      if (!languages.some((l) => l.lang === lang)) {
+        const extra = allLanguages?.find((l) => l.lang === lang)
+        if (extra) languages = [...languages, extra]
+      }
+      await updateSettings((draft) => {
+        draft.language = lang
+        if (!configured.includes(lang) && !base.some((b) => b.lang === lang)) {
+          draft.added = [...new Set([...(draft.added ?? []), lang])]
+        }
+      })
+      prepareEngine([lang]).catch(() => {})
+      toast(`Talk language: ${languages.find((l) => l.lang === lang)?.name ?? lang}`, "success", 1500)
+    }
+
+    async function removeLanguage(lang) {
+      if (!(settings.added ?? []).includes(lang)) {
+        return toast("Only languages added from “More languages…” can be removed here", "info", 3000)
+      }
+      languages = languages.filter((l) => l.lang !== lang)
+      await updateSettings((draft) => {
+        draft.added = (draft.added ?? []).filter((l) => l !== lang)
+        if (draft.language === lang) draft.language = null
+      })
+      context.ui.dialog.clear()
+      toast("Removed", "info", 1200)
+    }
+
+    async function pickLanguage() {
+      const picked = await context.ui.dialog.select({
+        title: "Talk language",
+        current: activeLanguage()?.lang,
+        options: [
+          ...languages.map(languageOption),
+          { title: "More languages…", value: MORE, description: "Every language this Mac can recognize" },
+        ],
+        actions: [{ bind: "ctrl+d", title: "Remove", onTrigger: (lang) => lang !== MORE && removeLanguage(lang) }],
+      })
+      if (!picked) return
+      if (picked !== MORE) return chooseLanguage(picked)
+
+      if (!allLanguages) {
+        toast("Loading languages…", "info", 4000)
+        allLanguages = (await listLanguages([], { all: true }).catch(() => [])).filter((l) => l.supported)
+      }
+      const lang = await context.ui.dialog.select({
+        title: "All languages (type to search)",
+        current: activeLanguage()?.lang,
+        options: allLanguages.map(languageOption),
+      })
+      if (lang) await chooseLanguage(lang)
+    }
 
     const toast = (message, variant = "info", duration = 2500) =>
       context.ui.toast.show({ title: "Talk", message, variant, duration })
@@ -106,13 +188,16 @@ export default Plugin.define({
       target = focusedInput()
       if (liveText) live.begin(target)
       heardSomething = false
-      status.show({ phase: "listening", since: Date.now(), text: "", holding: false })
+      const language = activeLanguage()
+      status.show({ phase: "listening", since: Date.now(), text: "", holding: false, lang: shortCode(language?.lang) })
       loudest = 0
       session = startListening({
-        lang: options.lang,
+        lang: language?.lang,
         mic: options.mic,
         engine: options.engine,
+        allowCloud,
         hints,
+        onInstalling: ({ name }) => toast(`Downloading Apple's on-device model for ${name} (one-time)…`, "info", 8000),
         onReady: ({ mic } = {}) => {
           resetSilence()
           // A mic that's connected but silent (e.g. AirPods in their case)
@@ -135,13 +220,13 @@ export default Plugin.define({
           heardSomething = true
           // Words go straight into the prompt; the footer keeps the clock and
           // meter. If the prompt isn't available, the footer shows the words.
-          const inPrompt = live.active && live.update(clean(text, vocab))
+          const inPrompt = live.active && live.update(clean(text, vocab, language?.lang))
           status.show({ text: inPrompt ? "" : text, holding: ptt.holding })
           resetSilence()
         },
         onFinal: async (raw) => {
           end()
-          const { text, send } = extractSend(clean(raw, vocab))
+          const { text, send } = extractSend(clean(raw, vocab, language?.lang), language?.lang)
           const submit = send || options.autoSend === true
           if (!text) {
             live.clear()
@@ -208,6 +293,16 @@ export default Plugin.define({
           },
         },
         {
+          id: "talk.language",
+          title: "Talk: language",
+          description: "Choose the language you speak",
+          group: "Voice",
+          bind: options.languageKeybind ?? false,
+          palette: true,
+          slash: { name: "talk:language" },
+          run: () => pickLanguage(),
+        },
+        {
           bind: "escape",
           run: () => {
             if (!session) return false
@@ -215,7 +310,7 @@ export default Plugin.define({
           },
         },
       ],
-      bindings: ["talk.toggle"],
+      bindings: ["talk.toggle", "talk.language"],
     }))
 
     return () => {

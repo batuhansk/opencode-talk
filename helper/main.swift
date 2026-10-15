@@ -2,7 +2,9 @@
 //
 // Usage:
 //   opencode-talk-helper listen [--lang en-US] [--mic "MacBook"] [--engine auto|dictation|legacy] [--hint JSON ...]
-//   opencode-talk-helper prepare     (installs the macOS 26 dictation model if needed)
+//   opencode-talk-helper prepare [--lang en-US --lang tr-TR]   (installs macOS 26 dictation models)
+//   opencode-talk-helper languages [--lang ...] [--all]         (default: System Settings languages)
+//   Add --allow-cloud to permit Apple's servers for languages without on-device support.
 //   opencode-talk-helper mics
 //   opencode-talk-helper transcribe <audio-file> [--engine ...] [--hint ...]
 //   opencode-talk-helper check
@@ -97,6 +99,9 @@ struct Options {
   var hints: [String] = []
   var mic: String?
   var engine = "auto"
+  var allowCloud = false
+  var all = false
+  var languages: [String] = []
   var positional: [String] = []
 
   init(_ arguments: [String]) {
@@ -110,9 +115,19 @@ struct Options {
         positional.append(flag)
         continue
       }
+      if flag == "--allow-cloud" {
+        allowCloud = true
+        continue
+      }
+      if flag == "--all" {
+        all = true
+        continue
+      }
       guard let value = rest.popFirst() else { break }
       switch flag {
-      case "--lang": language = value
+      case "--lang":
+        language = value
+        languages.append(value)
       case "--hint": hints.append(value)
       case "--mic": mic = value
       case "--engine": engine = value
@@ -199,7 +214,8 @@ final class LegacyEngine: @unchecked Sendable {
     request.shouldReportPartialResults = true
     request.contextualStrings = hints
     request.addsPunctuation = true
-    if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+    // Only reached without on-device support when the user allowed cloud recognition.
+    request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
   }
 
   func feed(_ buffer: CMSampleBuffer) { request.appendAudioSampleBuffer(buffer) }
@@ -462,14 +478,14 @@ final class Listener {
     }
     session.startRunning()
     guard session.isRunning else { fail("Could not start microphone \(microphone.localizedName)") }
-    emit(["event": "ready", "mic": microphone.localizedName, "engine": engineName.rawValue])
+    emit(["event": "ready", "mic": microphone.localizedName, "engine": engineName.rawValue, "lang": options.language])
   }
 
   /// Plays an audio file through the same pipeline as the microphone, in real
   /// time, then stops. Used by the integration tests.
   private func streamTestFile(_ path: String) {
     guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path)) else { fail("Cannot read \(path)") }
-    emit(["event": "ready", "mic": "file", "engine": engineName.rawValue])
+    emit(["event": "ready", "mic": "file", "engine": engineName.rawValue, "lang": options.language])
     let pcmFeed: (@Sendable (AVAudioPCMBuffer) -> Void)?
     switch engine {
     case .legacy(let legacy): pcmFeed = { legacy.request.append($0) }
@@ -580,20 +596,65 @@ func watchStdin(onStop: @escaping @Sendable () -> Void) {
 
 // MARK: - Engine selection
 
-/// Picks the engine: `dictation` when on macOS 26 with the model installed
-/// (or explicitly requested), otherwise `legacy`.
-func chooseEngine(_ requested: String) async -> (EngineKind, Locale?) {
-  if requested == "legacy" { return (.legacy, nil) }
-  if #available(macOS 26.0, *), let locale = await DictationAssets.supportedLocale(for: options.language) {
+/// Display name like "Turkish (Türkiye)".
+func displayName(_ identifier: String) -> String {
+  Locale(identifier: "en").localizedString(forIdentifier: identifier) ?? identifier
+}
+
+/// Whether the legacy recognizer can run this language on-device.
+func legacyOnDevice(_ language: String) -> Bool {
+  SFSpeechRecognizer(locale: Locale(identifier: language))?.supportsOnDeviceRecognition ?? false
+}
+
+/// Picks the engine for a language:
+/// 1. the macOS 26 dictation engine when its model is installed (always on-device);
+/// 2. otherwise the legacy engine if it runs on-device;
+/// 3. otherwise install the dictation model now (a one-time system download);
+/// 4. otherwise the legacy engine via Apple's servers, only if the user allowed it.
+func chooseEngine(_ requested: String, language: String, allowCloud: Bool) async -> (EngineKind, Locale?) {
+  let name = displayName(language)
+  let onDevice = legacyOnDevice(language)
+  let cloudHint = "Set \"onDeviceOnly\": false to allow Apple's servers for it."
+
+  if requested == "legacy" {
+    guard onDevice || allowCloud else { fail("\(name) isn't available on-device with the legacy engine. \(cloudHint)") }
+    return (.legacy, nil)
+  }
+
+  if #available(macOS 26.0, *), let locale = await DictationAssets.supportedLocale(for: language) {
     if await DictationAssets.isInstalled(locale) { return (.dictation, locale) }
-    if requested == "dictation" {
-      guard await DictationAssets.install(locale) else { fail("Could not install the dictation model for \(locale.identifier)") }
+    if requested == "dictation" || !onDevice {
+      emit(["event": "installing", "lang": language, "name": name])
+      guard await DictationAssets.install(locale) else {
+        if onDevice || allowCloud { return (.legacy, nil) }
+        fail("Couldn't download Apple's on-device model for \(name). Check your connection and try again.")
+      }
       return (.dictation, locale)
     }
   } else if requested == "dictation" {
-    fail("The dictation engine needs macOS 26 and a supported language")
+    fail("The dictation engine needs macOS 26 and a language it supports.")
   }
+
+  guard onDevice || allowCloud else { fail("\(name) can't be recognized on-device on this Mac. \(cloudHint)") }
   return (.legacy, nil)
+}
+
+/// Describes a language: whether it's supported, on-device, and by which engine.
+func describe(_ language: String) async -> [String: String] {
+  var info = ["event": "language", "lang": language, "name": displayName(language)]
+  var supported = SFSpeechRecognizer(locale: Locale(identifier: language)) != nil
+  var onDevice = legacyOnDevice(language)
+  var engine = onDevice ? "legacy" : "cloud"
+  if #available(macOS 26.0, *), let locale = await DictationAssets.supportedLocale(for: language) {
+    supported = true
+    onDevice = true
+    engine = "dictation"
+    info["installed"] = String(await DictationAssets.isInstalled(locale))
+  }
+  info["supported"] = String(supported)
+  info["onDevice"] = String(onDevice)
+  info["engine"] = supported ? engine : "none"
+  return info
 }
 
 // MARK: - Commands
@@ -647,30 +708,56 @@ func runForever() async -> Never {
 relaunchAsResponsible()
 
 let options = Options(Array(CommandLine.arguments.dropFirst()))
-guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: options.language)) else {
-  fail("No speech recognizer for language \(options.language)")
+
+/// The legacy recognizer for the requested language (needed by check, transcribe, listen).
+func legacyRecognizer() -> SFSpeechRecognizer {
+  guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: options.language)) else {
+    fail("\(displayName(options.language)) isn't supported for speech recognition on this Mac.")
+  }
+  return recognizer
 }
 
 switch options.command {
 case "check":
+  let recognizer = legacyRecognizer()
   await authorize()
-  let (engine, _) = await chooseEngine("auto")
+  let (engine, _) = await chooseEngine("auto", language: options.language, allowCloud: true)
   emit([
     "event": "ok",
     "lang": options.language,
     "engine": engine.rawValue,
-    "onDevice": String(recognizer.supportsOnDeviceRecognition),
+    "onDevice": String(engine == .dictation || recognizer.supportsOnDeviceRecognition),
   ])
   exit(0)
 
-case "prepare":
-  // Installs the macOS 26 dictation model if needed (a one-time, system-managed download).
-  guard #available(macOS 26.0, *), let locale = await DictationAssets.supportedLocale(for: options.language) else {
-    emit(["event": "ok", "engine": "legacy"])
-    exit(0)
+case "languages":
+  // --all: every language this Mac can recognize. Otherwise the given --lang
+  // values, or the user's preferred languages from System Settings.
+  var requested = options.languages.isEmpty ? Locale.preferredLanguages : options.languages
+  if options.all {
+    var ids = SFSpeechRecognizer.supportedLocales().map { $0.identifier(.bcp47) }
+    if #available(macOS 26.0, *) {
+      ids += await DictationTranscriber.supportedLocales.map { $0.identifier(.bcp47) }
+    }
+    requested = Array(Set(ids)).sorted { displayName($0) < displayName($1) }
   }
-  let ready = await DictationAssets.isInstalled(locale) ? true : await DictationAssets.install(locale)
-  emit(["event": "ok", "engine": ready ? "dictation" : "legacy", "lang": locale.identifier])
+  var seen = Set<String>()
+  for language in requested where seen.insert(language).inserted {
+    emit(await describe(language))
+  }
+  exit(0)
+
+case "prepare":
+  // Installs the macOS 26 dictation model for each language if needed
+  // (a one-time, system-managed download).
+  for language in options.languages.isEmpty ? [options.language] : options.languages {
+    guard #available(macOS 26.0, *), let locale = await DictationAssets.supportedLocale(for: language) else {
+      emit(["event": "ok", "lang": language, "engine": legacyOnDevice(language) ? "legacy" : "cloud"])
+      continue
+    }
+    let ready = await DictationAssets.isInstalled(locale) ? true : await DictationAssets.install(locale)
+    emit(["event": "ok", "lang": language, "engine": ready ? "dictation" : "legacy"])
+  }
   exit(0)
 
 case "mics":
@@ -682,14 +769,16 @@ case "mics":
 
 case "transcribe":
   guard let path = options.positional.first else { fail("Usage: transcribe <audio-file>") }
+  let recognizer = legacyRecognizer()
   await authorize()
-  let (engine, locale) = await chooseEngine(options.engine)
+  let (engine, locale) = await chooseEngine(options.engine, language: options.language, allowCloud: options.allowCloud)
   if engine == .dictation, #available(macOS 26.0, *), let locale {
     await transcribeDictation(file: path, locale: locale, hints: options.hints)
   }
   await transcribeLegacy(file: path, recognizer: recognizer, hints: options.hints)
 
 case "listen":
+  let recognizer = legacyRecognizer()
   await authorize()
   installAbortSignals()
   let microphone: AVCaptureDevice
@@ -705,7 +794,7 @@ case "listen":
     microphone = found
   }
 
-  let (engine, locale) = await chooseEngine(options.engine)
+  let (engine, locale) = await chooseEngine(options.engine, language: options.language, allowCloud: options.allowCloud)
   let listener: Listener
   if engine == .dictation, #available(macOS 26.0, *), let locale {
     listener = Listener(dictation: DictationEngine(locale: locale, hints: options.hints), microphone: microphone)
