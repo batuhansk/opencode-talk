@@ -47,7 +47,7 @@ into macOS and cleans up coding terms with fast local rules.
 |                              | opencode-talk          | Typical whisper-based plugin      |
 | ---------------------------- | ---------------------- | --------------------------------- |
 | Install                      | One plugin line        | Homebrew packages, Python, models |
-| Download size                | ~90 kB package         | ~700 MB                           |
+| Download size                | ~180 kB package        | ~700 MB                           |
 | API key / per-prompt AI call | None                   | Usually                           |
 | Words appear while you speak | Yes, in the prompt box | No (record, then transcribe)      |
 | Works offline                | Yes                    | Depends                           |
