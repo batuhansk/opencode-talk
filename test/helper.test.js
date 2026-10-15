@@ -11,7 +11,14 @@ import { fileURLToPath } from "node:url"
 import { startListening } from "../lib/helper.js"
 
 const HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "opencode-talk-helper")
-const skip = process.platform !== "darwin" ? "macOS only" : !existsSync(HELPER) ? "run npm run build first" : false
+function skipReason() {
+  if (process.platform !== "darwin") return "macOS only"
+  if (!existsSync(HELPER)) return "run npm run build first"
+  // CI machines (and fresh installs) haven't granted Speech Recognition yet.
+  const r = spawnSync(HELPER, ["check"], { encoding: "utf8", timeout: 20000 })
+  return r.status === 0 ? false : "helper lacks Speech Recognition/Microphone permission"
+}
+const skip = skipReason()
 
 const run = (...args) => {
   const r = spawnSync(HELPER, args, { encoding: "utf8", timeout: 60000 })

@@ -27,10 +27,14 @@
   "os": [
     "darwin"
   ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "sh scripts/build-helper.sh",
     "test": "node --test test/*.test.js",
-    "prepack": "npm run build && npm test"
+    "prepack": "npm run build && npm test",
+    "format": "prettier --write ."
   },
   "peerDependencies": {
     "@opencode/plugin": ">=2"
