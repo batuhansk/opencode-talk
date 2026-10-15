@@ -13,6 +13,15 @@
     "opencode-v2"
   ],
   "license": "MIT",
+  "author": "Batuhan Saka (https://github.com/batuhansk)",
+  "homepage": "https://github.com/batuhansk/opencode-talk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/batuhansk/opencode-talk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/batuhansk/opencode-talk/issues"
+  },
   "type": "module",
   "exports": {
     "./tui": {

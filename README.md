@@ -1,5 +1,9 @@
 # opencode-talk
 
+[![CI](https://github.com/batuhansk/opencode-talk/actions/workflows/ci.yml/badge.svg)](https://github.com/batuhansk/opencode-talk/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/opencode-talk)](https://www.npmjs.com/package/opencode-talk)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Talk instead of type in [OpenCode](https://opencode.ai/).
 
 Press a key, speak your prompt, press it again, and your words land in the
@@ -127,4 +131,4 @@ Test a local checkout by pointing `cli.json` at the folder:
 
 ## License
 
-MIT
+MIT © [Batuhan Saka](https://github.com/batuhansk)
