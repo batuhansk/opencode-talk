@@ -28,6 +28,11 @@ jobs:
             exit 1
           fi
 
+      - name: Use npm 11.15+ (needed for npm stage and trusted publishing)
+        run: |
+          npm install -g npm@^11.15.0
+          npm --version
+
       - name: Build helper
         run: npm run build
 
