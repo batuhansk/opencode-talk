@@ -36,7 +36,7 @@ jobs:
         run: npx -y prettier@3 --check .
       - name: Check package contents
         run: npm pack --dry-run --ignore-scripts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: helper
           path: bin/opencode-talk-helper
